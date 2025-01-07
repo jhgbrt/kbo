@@ -5,7 +5,7 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Net.Code.Kbo.Data", "Net.Code.Kbo.Data\Net.Code.Kbo.Data.csproj", "{29E05B1B-583D-425C-AA68-CD1A9C5EE740}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Net.Code.Kbo.Tui", "Net.Code.Kbo.Tui\Net.Code.Kbo.Tui.csproj", "{22799B33-F6C1-4E7C-A3C7-A3B41120F8E3}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Net.Code.Kbo.Cli", "Net.Code.Kbo.Cli\Net.Code.Kbo.Cli.csproj", "{22799B33-F6C1-4E7C-A3C7-A3B41120F8E3}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
