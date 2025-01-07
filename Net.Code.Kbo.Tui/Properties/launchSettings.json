@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "Net.Code.Kbo.Tui": {
+      "commandName": "Project",
+      "workingDirectory": "$(ProjectDir)"
+    }
+  }
+}
