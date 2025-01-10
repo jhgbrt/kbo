@@ -1,12 +1,8 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
-
-using Net.Code.Csv;
-
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace Net.Code.Kbo.Data;
-
 public class DesignTimeContextFactory : IDesignTimeDbContextFactory<KboDataContext>
 {
     public KboDataContext CreateDbContext(string[] args)
@@ -17,94 +13,173 @@ public class DesignTimeContextFactory : IDesignTimeDbContextFactory<KboDataConte
         return new KboDataContext(optionsBuilder.Options);
     }
 }
+
 public class KboDataContext(DbContextOptions<KboDataContext> options) : DbContext(options)
 {
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
 
-        modelBuilder.Entity<Activity>()
-            .HasKey(a => new { a.EnterpriseNumber, a.NaceCode, a.NaceVersion, a.Classification, a.ActivityGroup });
+        var meta = modelBuilder.Entity<Meta>();
+        meta.HasKey(m => m.Variable);
 
-        modelBuilder.Entity<Address>()
-            .HasKey(a => new { a.EntityNumber, a.TypeOfAddress });
+        var code = modelBuilder.Entity<Code>();
+        code.HasKey(c => new { c.Id });
+        code.Property(c => c.Id).ValueGeneratedOnAdd();
+
+        var codeDescription = modelBuilder.Entity<CodeDescription>();
+        codeDescription.HasKey(c => c.Id);
+        codeDescription.Property(c => c.Id).ValueGeneratedOnAdd();
+        codeDescription.HasOne(c => c.Code).WithMany(c => c.Descriptions);
+
+        var enterprise = modelBuilder.Entity<Enterprise>();
+        enterprise.HasKey(e => e.EnterpriseNumber);
+        enterprise.HasOne(e => e.Status).WithMany().IsRequired(true);
+        enterprise.HasOne(enterprise => enterprise.JuridicalSituation)
+            .WithMany().IsRequired(true);
+        enterprise.HasOne(enterprise => enterprise.TypeOfEnterprise)
+            .WithMany().IsRequired(true);
+        enterprise.HasOne(enterprise => enterprise.JuridicalForm)
+            .WithMany().IsRequired(false);
+        enterprise.HasOne(enterprise => enterprise.JuridicalFormCAC)
+            .WithMany().IsRequired(false);
+
+        var activity = modelBuilder.Entity<Activity>();
+        activity.HasKey(a => a.Id);
+        activity.Property(a => a.Id).ValueGeneratedOnAdd();
+        activity.HasOne(a => a.Enterprise)
+            .WithMany(e => e.Activities)
+            .HasForeignKey(e => e.EnterpriseNumber)
+            .HasPrincipalKey(e => e.EnterpriseNumber);
+        // TODO activitygroup is required to spec; however data contains nulls
+        activity.HasOne(a => a.ActivityGroup)
+            .WithMany().IsRequired(false); 
+        activity.HasOne(a => a.NaceCode)
+            .WithMany().IsRequired(true);
+        activity.HasOne(a => a.Classification)
+            .WithMany().IsRequired(true);
+
+        var establishment = modelBuilder.Entity<Establishment>();
+        establishment.HasKey(e => e.EstablishmentNumber);
+        establishment.HasOne(e => e.Enterprise)
+            .WithMany(e => e.Establishments)
+            .IsRequired(true)
+            .HasForeignKey(e => e.EnterpriseNumber)
+            .HasPrincipalKey(e => e.EnterpriseNumber);
+
+        var address = modelBuilder.Entity<Address>();
+        address.HasKey(a => new { a.EntityNumber, a.TypeOfAddressId });
+        address.HasOne(a => a.TypeOfAddress)
+            .WithMany()
+            .HasForeignKey(a => a.TypeOfAddressId);
+
+        var contact = modelBuilder.Entity<Contact>();
+        contact.HasKey(c => c.Id);
+        contact.Property(c => c.Id).ValueGeneratedOnAdd();
+        contact.HasOne(c => c.EntityContact)
+            .WithMany().IsRequired(true);
+        contact.HasOne(c => c.ContactType)
+            .WithMany().IsRequired(true);
+
+        var denomination = modelBuilder.Entity<Denomination>();
+        denomination.HasKey(d => new { d.Id });
+        denomination.Property(d => d.Id).ValueGeneratedOnAdd();
+        denomination.HasOne(d => d.TypeOfDenomination)
+            .WithMany()
+            .IsRequired(true)
+            .HasForeignKey(d => d.TypeOfDenominationId)
+            .HasPrincipalKey(d => d.Id);
+        denomination.HasOne(d => d.Language)
+            .WithMany()
+            .IsRequired(true)
+            .HasForeignKey(d => d.LanguageId)
+            .HasPrincipalKey(d => d.Id);
 
         modelBuilder.Entity<Code>()
-            .HasKey(c => new { c.CodeValue, c.Language, c.Category });
+            .HasDiscriminator(c => c.Category)
+            .HasValue<Language>("Language")
+            .HasValue<TypeOfEnterprise>("TypeOfEnterprise")
+            .HasValue<JuridicalSituation>("JuridicalSituation")
+            .HasValue<JuridicalForm>("JuridicalForm")
+            .HasValue<ActivityGroup>("ActivityGroup")
+            .HasValue<TypeOfDenomination>("TypeOfDenomination")
+            .HasValue<Nace2003>("Nace2003")
+            .HasValue<Nace2008>("Nace2008")
+            .HasValue<TypeOfAddress>("TypeOfAddress")
+            .HasValue<Status>("Status")
+            .HasValue<Classification>("Classification")
+            .HasValue<EntityContact>("EntityContact")
+            .HasValue<ContactType>("ContactType");
 
-        modelBuilder.Entity<Contact>()
-            .HasKey(c => new { c.EntityNumber, c.Value, c.EntityContact, c.ContactType });
-
-        modelBuilder.Entity<Denomination>()
-            .HasKey(d => new { d.EntityNumber, d.TypeOfDenomination, d.Language });
-
-        modelBuilder.Entity<Enterprise>()
-            .HasKey(e => e.EnterpriseNumber);
-
-        modelBuilder.Entity<Establishment>()
-            .HasKey(e => e.EstablishmentNumber);
-
-        modelBuilder.Entity<Meta>()
-            .HasKey(m => m.Variable);
         // Indexes
-        modelBuilder.Entity<Activity>()
-            .HasIndex(a => a.NaceCode)
-            .HasDatabaseName("Activity_NaceCode_idx");
-
         modelBuilder.Entity<Code>()
-            .HasIndex(c => c.CodeValue)
-            .HasDatabaseName("Code_Code_idx");
-
-        modelBuilder.Entity<Enterprise>()
-            .HasIndex(e => e.JuridicalForm)
-            .HasDatabaseName("Enterprise_JuridicalForm_idx");
-
-        modelBuilder.Entity<Enterprise>()
-            .HasIndex(e => e.StartDate)
-            .HasDatabaseName("Enterprise_StartDate_idx");
-
-        modelBuilder.Entity<Establishment>()
-            .HasIndex(e => e.StartDate)
-            .HasDatabaseName("Establishment_StartDate_idx");
-
+            .HasIndex(c => new { c.Category, c.CodeValue } ).IsUnique()
+            .HasDatabaseName("Code_CategoryCode_idx");
     }
 
     public DbSet<Enterprise> Enterprises { get; set; }
+    public DbSet<Establishment> Establishments { get; set; }
+    public DbSet<Activity> Activities { get; set; }
+    public DbSet<Branch> Branches { get; set; }
+    public DbSet<Address> Addresses { get; set; }
+    public DbSet<Contact> Contacts { get; set; }
+    public DbSet<Denomination> Denominations { get; set; }
+    public DbSet<Meta> Meta { get; set; }
+    public DbSet<Code> Codes { get; set; }
+    public DbSet<Language> Languages { get; set; }
+    public DbSet<TypeOfEnterprise> TypeOfEnterprises { get; set; }
+    public DbSet<JuridicalSituation> JuridicalSituations { get; set; }
+    public DbSet<JuridicalForm> JuridicalForms { get; set; }
+    public DbSet<ActivityGroup> ActivityGroups { get; set; }
+    public DbSet<TypeOfDenomination> TypeOfDenominations { get; set; }
+    public DbSet<Nace2003> Nace2003s { get; set; }
+    public DbSet<Nace2008> Nace2008s { get; set; }
+    public DbSet<TypeOfAddress> TypeOfAddresses { get; set; }
+    public DbSet<Status> Statuses { get; set; }
+    public DbSet<Classification> Classifications { get; set; }
+    public DbSet<ContactType> ContactTypes { get; set; }
+    public DbSet<EntityContact> EntityContacts { get; set; }
+
 }
 
 public class Enterprise
 {
     public required string EnterpriseNumber { get; set; } = string.Empty;
-    public required string Status { get; set; } = string.Empty;
-    public required string JuridicalSituation { get; set; } = string.Empty;
-    public required string TypeOfEnterprise { get; set; } = string.Empty;
-    public required string JuridicalForm { get; set; } = string.Empty;
-    public required string JuridicalFormCAC { get; set; } = string.Empty;
-    [CsvFormat("dd-MM-yyyy")]
+    public int StatusId { get; set; }
+    public Status Status { get; set; } = null!;
+    public JuridicalSituation JuridicalSituation { get; set; } = null!;
+    public TypeOfEnterprise TypeOfEnterprise { get; set; } = null!;
+    public JuridicalForm? JuridicalForm { get; set; }
+    public JuridicalForm? JuridicalFormCAC { get; set; }
     public DateTime StartDate { get; set; }
+    public ICollection<Establishment> Establishments { get; set; } = [];
+    public ICollection<Activity> Activities { get; set; } = [];
 }
 
 public class Establishment
 {
     public required string EstablishmentNumber { get; set; } = string.Empty;
-    [CsvFormat("dd-MM-yyyy")]
     public DateTime StartDate { get; set; }
     public required string EnterpriseNumber { get; set; } = string.Empty;
+    public Enterprise Enterprise { get; set; } = null!;
 }
 
 public class Activity
 {
+    public int Id { get; set; }
     public required string EnterpriseNumber { get; set; } = string.Empty;
-    public string ActivityGroup { get; set; } = string.Empty;
+    public ActivityGroup? ActivityGroup { get; set; }
     public string NaceVersion { get; set; } = string.Empty;
-    public string NaceCode { get; set; } = string.Empty;
-    public string Classification { get; set; } = string.Empty;
+    public required NaceCode NaceCode { get; set; }
+    public int NaceCodeId { get; set; }
+    public required Classification Classification { get; set; }
+    public Enterprise? Enterprise { get; set; }
 }
 
 public class Branch
 {
     public required string Id { get; set; } = string.Empty;
-    [CsvFormat("dd-MM-yyyy")]
     public DateTime StartDate { get; set; }
     public required string EnterpriseNumber { get; set; } = string.Empty;
 }
@@ -112,7 +187,8 @@ public class Branch
 public class Address
 {
     public required string EntityNumber { get; set; } = string.Empty;
-    public string TypeOfAddress { get; set; } = string.Empty;
+    public required TypeOfAddress TypeOfAddress { get; set; } = null!;
+    public required int TypeOfAddressId { get; set; }
     public string CountryNL { get; set; } = string.Empty;
     public string CountryFR { get; set; } = string.Empty;
     public string Zipcode { get; set; } = string.Empty;
@@ -123,23 +199,26 @@ public class Address
     public string HouseNumber { get; set; } = string.Empty;
     public string Box { get; set; } = string.Empty;
     public string ExtraAddressInfo { get; set; } = string.Empty;
-    [CsvFormat("dd-MM-yyyy")]
     public DateTime DateStrikingOff { get; set; }
 }
 
 public class Contact
 {
+    public int Id { get; set; }
     public required string EntityNumber { get; set; } = string.Empty;
-    public string EntityContact { get; set; } = string.Empty;
-    public string ContactType { get; set; } = string.Empty;
+    public required EntityContact EntityContact { get; set; }
+    public required ContactType ContactType { get; set; }
     public string Value { get; set; } = string.Empty;
 }
 
 public class Denomination
 {
+    public int Id { get; set; }
     public required string EntityNumber { get; set; } = string.Empty;
-    public string Language { get; set; } = string.Empty;
-    public string TypeOfDenomination { get; set; } = string.Empty;
+    public required Language Language { get; set; }
+    public int LanguageId { get; set; }
+    public required TypeOfDenomination TypeOfDenomination { get; set; }
+    public int TypeOfDenominationId { get; set; }
     [Column("Denomination")]
     public string DenominationValue { get; set; } = string.Empty;
 }
@@ -152,9 +231,35 @@ public class Meta
 
 public class Code
 {
+    public required int Id { get; set; }
     public required string Category { get; set; } = string.Empty;
     [Column("Code")]
     public required string CodeValue { get; set; } = string.Empty;
+    public ICollection<CodeDescription> Descriptions { get; set; } = [];
+}
+
+public class CodeDescription
+{
+    public required int Id { get; set; }
+    public required int CodeId { get; set; }
+    public required string Category { get; set; } = string.Empty;
+    public required string CodeValue { get; set; } = string.Empty;
     public string Language { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
+    public Code Code { get; set; } = null!;
 }
+
+public class Language : Code { }
+public class TypeOfEnterprise : Code { }
+public class JuridicalSituation : Code { }
+public class JuridicalForm : Code { }
+public class ActivityGroup : Code { }
+public class TypeOfDenomination : Code { }
+public abstract class NaceCode: Code { }
+public class Nace2003 : NaceCode { }
+public class Nace2008 : NaceCode { }
+public class TypeOfAddress : Code { }
+public class Status : Code { }
+public class Classification : Code { }
+public class EntityContact : Code { }
+public class ContactType : Code { }
