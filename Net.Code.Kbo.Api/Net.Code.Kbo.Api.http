@@ -1,0 +1,6 @@
+@Net.Code.Kbo.Api_HostAddress = http://localhost:5063
+
+GET {{Net.Code.Kbo.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

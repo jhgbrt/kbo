@@ -121,7 +121,6 @@ public class KboDataContext(DbContextOptions<KboDataContext> options) : DbContex
     public DbSet<Enterprise> Enterprises { get; set; }
     public DbSet<Establishment> Establishments { get; set; }
     public DbSet<Activity> Activities { get; set; }
-    public DbSet<Branch> Branches { get; set; }
     public DbSet<Address> Addresses { get; set; }
     public DbSet<Contact> Contacts { get; set; }
     public DbSet<Denomination> Denominations { get; set; }
@@ -148,10 +147,14 @@ public class Enterprise
     public required string EnterpriseNumber { get; set; } = string.Empty;
     public int StatusId { get; set; }
     public Status Status { get; set; } = null!;
-    public JuridicalSituation JuridicalSituation { get; set; } = null!;
-    public TypeOfEnterprise TypeOfEnterprise { get; set; } = null!;
+    public string GetStatus(string language) => Status.GetDescription(language);
+    public required JuridicalSituation JuridicalSituation { get; set; } = null!;
+    public string GetJuridicalSituation(string language) => JuridicalSituation.GetDescription(language);
+    public required TypeOfEnterprise TypeOfEnterprise { get; set; } = null!;
+    public string GetTypeOfEnterprise(string language) => TypeOfEnterprise.GetDescription(language);
     public JuridicalForm? JuridicalForm { get; set; }
     public JuridicalForm? JuridicalFormCAC { get; set; }
+    public string? GetJuridicalForm(string language) => (JuridicalFormCAC??JuridicalFormCAC)?.GetDescription(language);
     public DateTime StartDate { get; set; }
     public ICollection<Establishment> Establishments { get; set; } = [];
     public ICollection<Activity> Activities { get; set; } = [];
@@ -170,24 +173,29 @@ public class Activity
     public int Id { get; set; }
     public required string EnterpriseNumber { get; set; } = string.Empty;
     public ActivityGroup? ActivityGroup { get; set; }
+    public string? GetActivityGroup(string language) => ActivityGroup?.GetDescription(language);
     public string NaceVersion { get; set; } = string.Empty;
     public required NaceCode NaceCode { get; set; }
+    public string GetNaceCode(string language) => NaceCode.GetDescription(language);
     public int NaceCodeId { get; set; }
     public required Classification Classification { get; set; }
+    public string GetClassification(string language) => Classification.GetDescription(language);
     public Enterprise? Enterprise { get; set; }
-}
-
-public class Branch
-{
-    public required string Id { get; set; } = string.Empty;
-    public DateTime StartDate { get; set; }
-    public required string EnterpriseNumber { get; set; } = string.Empty;
 }
 
 public class Address
 {
     public required string EntityNumber { get; set; } = string.Empty;
     public required TypeOfAddress TypeOfAddress { get; set; } = null!;
+    public string GetTypeOfAddress(string language) => TypeOfAddress.GetDescription(language);
+
+    internal (string street, string number, string box, string zipcode, string municipality) GetAddress(string language)
+    {
+        var street = language == "FR" ? StreetFR : StreetNL;
+        var municipality = language == "FR" ? MunicipalityFR : MunicipalityNL;
+        return (street, HouseNumber, Box, Zipcode, municipality);
+    }
+
     public required int TypeOfAddressId { get; set; }
     public string CountryNL { get; set; } = string.Empty;
     public string CountryFR { get; set; } = string.Empty;
@@ -207,7 +215,9 @@ public class Contact
     public int Id { get; set; }
     public required string EntityNumber { get; set; } = string.Empty;
     public required EntityContact EntityContact { get; set; }
+    public string GetEntityContact(string language) => EntityContact.GetDescription(language);
     public required ContactType ContactType { get; set; }
+    public string GetContactType(string language) => ContactType.GetDescription(language);
     public string Value { get; set; } = string.Empty;
 }
 
@@ -216,8 +226,10 @@ public class Denomination
     public int Id { get; set; }
     public required string EntityNumber { get; set; } = string.Empty;
     public required Language Language { get; set; }
+    public string GetLanguage(string language) => Language.GetDescription(language);
     public int LanguageId { get; set; }
     public required TypeOfDenomination TypeOfDenomination { get; set; }
+    public string GetTypeOfDenomination(string language) => TypeOfDenomination.GetDescription(language);
     public int TypeOfDenominationId { get; set; }
     [Column("Denomination")]
     public string DenominationValue { get; set; } = string.Empty;
@@ -231,19 +243,28 @@ public class Meta
 
 public class Code
 {
-    public required int Id { get; set; }
+    public int Id { get; set; }
     public required string Category { get; set; } = string.Empty;
     [Column("Code")]
     public required string CodeValue { get; set; } = string.Empty;
     public ICollection<CodeDescription> Descriptions { get; set; } = [];
+
+    public string GetDescription(string language)
+    {
+        ReadOnlySpan<string> languages = [language.ToUpperInvariant(), "EN", "NL", "FR", "DE"];
+        foreach (var l in languages)
+        {
+            var d = Descriptions.FirstOrDefault(d => d.Language == l);
+            if (d is not null) return d.Description;
+        }
+        return string.Empty;
+    }
 }
 
 public class CodeDescription
 {
-    public required int Id { get; set; }
-    public required int CodeId { get; set; }
-    public required string Category { get; set; } = string.Empty;
-    public required string CodeValue { get; set; } = string.Empty;
+    public int Id { get; set; }
+    public int CodeId { get; set; }
     public string Language { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
     public Code Code { get; set; } = null!;
@@ -263,3 +284,5 @@ public class Status : Code { }
 public class Classification : Code { }
 public class EntityContact : Code { }
 public class ContactType : Code { }
+
+

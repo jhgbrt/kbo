@@ -34,6 +34,7 @@ static class Setup
         services.AddSingleton(new DataContextFactory(connectionString));
         services.AddTransient<BulkImport>();
         services.AddTransient<Reporting>();
+        services.AddDbContext<KboDataContext>(options => options.UseSqlite(connectionString));
         return services.BuildServiceProvider();
     }
 }

@@ -85,15 +85,10 @@ public class BulkImport(DataContextFactory factory, ILogger<BulkImport> logger)
                        group item by (item.Category, item.CodeValue) into descriptions
                        select new Data.Code
                        {
-                           Id = 0,
                            CodeValue = descriptions.Key.CodeValue,
                            Category = descriptions.Key.Category,
                            Descriptions = descriptions.Select(d => new CodeDescription
                            {
-                               Id = 0,
-                               CodeId = 0,
-                               CodeValue = d.CodeValue,
-                               Category = d.Category,
                                Language = d.Language,
                                Description = d.Description
                            }).ToList()
