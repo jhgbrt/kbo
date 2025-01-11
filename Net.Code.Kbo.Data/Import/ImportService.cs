@@ -1,21 +1,25 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
-using Net.Code.ADONet;
 using Net.Code.Csv;
 using Net.Code.Kbo.Data;
 
 
 namespace Net.Code.Kbo;
 
-public class BulkImport(DataContextFactory factory, ILogger<BulkImport> logger)
+public interface IImportService
 {
-    string[] filenames = [
+    int ImportAll(string folder, bool incremental, int? limit, int? batchSize);
+    int ImportFiles(string folder, IEnumerable<string> files, bool incremental, int? limit, int? batchSize);
+}
+public class ImportService(DataContextFactory factory, ILogger<ImportService> logger) : IImportService
+{
+    static readonly string[] filenames = [
         "meta",
         "code",
         "enterprise",
-//        "activity",
         "establishment",
+        "branch",
         "address",
         "denomination",
         "contact"
@@ -41,10 +45,10 @@ public class BulkImport(DataContextFactory factory, ILogger<BulkImport> logger)
                 "meta" => ImportMeta(folder),
                 "code" => ImportCodes(folder),
                 "enterprise" => ImportEnterprises(folder, incremental, limit, batchSize),
-                "address" => ImportAddresses(folder, incremental, limit, batchSize),
                 "establishment" => ImportEstablishments(folder, incremental, limit, batchSize),
+                "branch" => ImportBranches(folder, incremental, limit, batchSize),
+                "address" => ImportAddresses(folder, incremental, limit, batchSize),
                 "denomination" => ImportDenominations(folder, incremental, limit, batchSize),
-                "activity" => ImportActivities(folder, incremental, limit, batchSize),
                 "contact" => ImportContacts(folder, incremental, limit, batchSize),
                 _ => -1
             };
@@ -103,7 +107,7 @@ public class BulkImport(DataContextFactory factory, ILogger<BulkImport> logger)
     int ImportAddresses(string folder, bool incremental, int? limit, int? batchSize)
     {
         using var context = factory.DataContext();
-        var types = context.TypeOfAddresses.ToDictionary(t => t.CodeValue);
+        var types = context.TypesOfAddress.ToDictionary(t => t.CodeValue);
 
         return Import(
             context,
@@ -140,8 +144,7 @@ public class BulkImport(DataContextFactory factory, ILogger<BulkImport> logger)
 
         var juridicalForms = context.JuridicalForms.ToList().ToDictionary(j => j.CodeValue);
         var juridicalSituations = context.JuridicalSituations.ToDictionary(j => j.CodeValue);
-        var typesOfEnterprises = context.TypeOfEnterprises.ToDictionary(t => t.CodeValue);
-        var statuses = context.Statuses.ToDictionary(s => s.CodeValue);
+        var typesOfEnterprises = context.TypesOfEnterprise.ToDictionary(t => t.CodeValue);
 
         return Import(
             context,
@@ -154,13 +157,10 @@ public class BulkImport(DataContextFactory factory, ILogger<BulkImport> logger)
                     let juridicalFormCAC = item.JuridicalFormCAC is null ? null : juridicalForms[item.JuridicalFormCAC]
                     let juridicalSituation = juridicalSituations[item.JuridicalSituation]
                     let typeOfEnterprise = typesOfEnterprises[item.TypeOfEnterprise]
-                    let status = statuses[item.Status]
                     where typeOfEnterprise != null
                     select new Enterprise
                     {
-                        EnterpriseNumber = item.EnterpriseNumber,
-                        Status = status,
-                        StatusId = status.Id,
+                        EnterpriseNumber = KboNr.Parse(item.EnterpriseNumber),
                         JuridicalSituation = juridicalSituation,
                         TypeOfEnterprise = typeOfEnterprise,
                         JuridicalForm = juridicalForm,
@@ -185,7 +185,7 @@ public class BulkImport(DataContextFactory factory, ILogger<BulkImport> logger)
                      where enterprise != null
                      select new Establishment
                      {
-                         EnterpriseNumber = item.EnterpriseNumber,
+                         EnterpriseNumber = KboNr.Parse(item.EnterpriseNumber),
                          Enterprise = enterprise,
                          EstablishmentNumber = item.EstablishmentNumber,
                          StartDate = item.StartDate,
@@ -193,11 +193,34 @@ public class BulkImport(DataContextFactory factory, ILogger<BulkImport> logger)
         );
     }
 
+    public int ImportBranches(string folder, bool incremental, int? limit, int? batchSize)
+    {
+        using var context = factory.DataContext();
+
+        return Import(
+            context,
+            Read<Data.Import.Branch>(folder, "branch.csv", limit),
+            limit,
+            batchSize,
+            context => context.Branches,
+            items => from item in items
+                     let enterprise = context.Enterprises.Find(item.EnterpriseNumber)
+                     select new Branch
+                     {
+                         Id = item.Id,
+                         EnterpriseNumber = KboNr.Parse(item.EnterpriseNumber),
+                         Enterprise = enterprise,
+                         StartDate = item.StartDate
+                     }
+        );
+    }
+
+
     int ImportDenominations(string folder, bool incremental, int? limit, int? batchSize)
     {
         using var context = factory.DataContext();
 
-        var types = context.TypeOfDenominations.ToDictionary(t => t.CodeValue);
+        var types = context.TypesOfDenomination.ToDictionary(t => t.CodeValue);
         var languages = context.Languages.ToDictionary(l => l.CodeValue);
 
         return Import(
@@ -227,40 +250,7 @@ public class BulkImport(DataContextFactory factory, ILogger<BulkImport> logger)
                      errormessage)
         );
     }
-
-
-    int ImportActivities(string folder, bool incremental, int? limit, int? batchSize)
-    {
-        using var context = factory.DataContext();
-
-        var activityGroups = context.ActivityGroups.ToDictionary(a => a.CodeValue);
-        var classifications = context.Classifications.ToDictionary(c => c.CodeValue);
-        var naceCodes2008 = context.Nace2008s.ToDictionary(n => n.CodeValue, c => c as NaceCode);
-        var naceCodes2003 = context.Nace2003s.ToDictionary(n => n.CodeValue, c => c as NaceCode);
-
-        return Import(
-            context,
-            Read<Data.Import.Activity>(folder, "activity.csv", limit),
-            limit,
-            batchSize,
-            context => context.Activities,
-            items => from item in items
-                     let enterprise = context.Enterprises.Find(item.EnterpriseNumber)
-                     where enterprise != null
-                     let activityGroup = item.ActivityGroup is null ? null : activityGroups[item.ActivityGroup]
-                     let classification = classifications[item.Classification]
-                     let naceCode = item.NaceVersion == "2003" ? naceCodes2003[item.NaceCode] : naceCodes2008[item.NaceCode]
-                     select new Activity
-                     {
-                         EnterpriseNumber = item.EnterpriseNumber,
-                         ActivityGroup = activityGroup,
-                         NaceVersion = item.NaceVersion,
-                         NaceCode = naceCode,
-                         Classification = classification,
-                     }
-        );
-    }
-
+       
     int ImportContacts(string folder, bool incremental, int? limit, int? batchSize)
     {
         using var context = factory.DataContext();
@@ -364,3 +354,4 @@ public class BulkImport(DataContextFactory factory, ILogger<BulkImport> logger)
     }
 
 }
+

@@ -1,4 +1,4 @@
-﻿namespace Net.Code.Kbo;
+﻿namespace Net.Code.Kbo.Data;
 static class LinqEx
 {
     public static IEnumerable<T[]> Batch<T>(

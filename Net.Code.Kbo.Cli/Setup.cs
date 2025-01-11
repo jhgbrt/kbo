@@ -31,24 +31,12 @@ static class Setup
             //l.AddFilter("Microsoft", LogLevel.Warning);
             //l.AddFilter("System", LogLevel.Error);
         });
-        services.AddSingleton(new DataContextFactory(connectionString));
-        services.AddTransient<BulkImport>();
         services.AddTransient<Reporting>();
-        services.AddDbContext<KboDataContext>(options => options.UseSqlite(connectionString));
+        services.AddImportService(connectionString);
         return services.BuildServiceProvider();
     }
 }
 
 
-public class DataContextFactory(string connectionString)
-{
-    public KboDataContext DataContext()
-    {
-        var optionsBuilder = new DbContextOptionsBuilder<KboDataContext>();
-        optionsBuilder.UseSqlite(connectionString);
-        var context = new KboDataContext(optionsBuilder.Options);
-        context.Database.EnsureCreated();
-        return context;
-    }
-}
+
 

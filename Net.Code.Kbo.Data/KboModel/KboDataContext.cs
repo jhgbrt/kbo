@@ -1,8 +1,23 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
+
+using Net.Code.Kbo.Data.Service;
+
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace Net.Code.Kbo.Data;
+public class DataContextFactory(string connectionString)
+{
+    public KboDataContext DataContext()
+    {
+        var optionsBuilder = new DbContextOptionsBuilder<KboDataContext>();
+        optionsBuilder.UseSqlite(connectionString);
+        var context = new KboDataContext(optionsBuilder.Options);
+        context.Database.EnsureCreated();
+        return context;
+    }
+}
+
 public class DesignTimeContextFactory : IDesignTimeDbContextFactory<KboDataContext>
 {
     public KboDataContext CreateDbContext(string[] args)
@@ -35,7 +50,11 @@ public class KboDataContext(DbContextOptions<KboDataContext> options) : DbContex
 
         var enterprise = modelBuilder.Entity<Enterprise>();
         enterprise.HasKey(e => e.EnterpriseNumber);
-        enterprise.HasOne(e => e.Status).WithMany().IsRequired(true);
+        enterprise.Property(e => e.EnterpriseNumber)
+            .HasConversion(
+                e => e.ToString("F"),
+                e => KboNr.Parse(e)
+            );
         enterprise.HasOne(enterprise => enterprise.JuridicalSituation)
             .WithMany().IsRequired(true);
         enterprise.HasOne(enterprise => enterprise.TypeOfEnterprise)
@@ -45,25 +64,28 @@ public class KboDataContext(DbContextOptions<KboDataContext> options) : DbContex
         enterprise.HasOne(enterprise => enterprise.JuridicalFormCAC)
             .WithMany().IsRequired(false);
 
-        var activity = modelBuilder.Entity<Activity>();
-        activity.HasKey(a => a.Id);
-        activity.Property(a => a.Id).ValueGeneratedOnAdd();
-        activity.HasOne(a => a.Enterprise)
-            .WithMany(e => e.Activities)
-            .HasForeignKey(e => e.EnterpriseNumber)
-            .HasPrincipalKey(e => e.EnterpriseNumber);
-        // TODO activitygroup is required to spec; however data contains nulls
-        activity.HasOne(a => a.ActivityGroup)
-            .WithMany().IsRequired(false); 
-        activity.HasOne(a => a.NaceCode)
-            .WithMany().IsRequired(true);
-        activity.HasOne(a => a.Classification)
-            .WithMany().IsRequired(true);
-
         var establishment = modelBuilder.Entity<Establishment>();
         establishment.HasKey(e => e.EstablishmentNumber);
+        establishment.Property(e => e.EnterpriseNumber)
+            .HasConversion(
+                e => e.ToString("F"),
+                e => KboNr.Parse(e)
+            );
         establishment.HasOne(e => e.Enterprise)
             .WithMany(e => e.Establishments)
+            .IsRequired(true)
+            .HasForeignKey(e => e.EnterpriseNumber)
+            .HasPrincipalKey(e => e.EnterpriseNumber);
+
+        var branch = modelBuilder.Entity<Branch>();
+        branch.HasKey(b => b.Id);
+        branch.Property(b => b.EnterpriseNumber)
+            .HasConversion(
+                e => e.ToString("F"),
+                e => KboNr.Parse(e)
+            );
+        branch.HasOne(e => e.Enterprise)
+            .WithMany(e => e.Branches)
             .IsRequired(true)
             .HasForeignKey(e => e.EnterpriseNumber)
             .HasPrincipalKey(e => e.EnterpriseNumber);
@@ -106,8 +128,8 @@ public class KboDataContext(DbContextOptions<KboDataContext> options) : DbContex
             .HasValue<TypeOfDenomination>("TypeOfDenomination")
             .HasValue<Nace2003>("Nace2003")
             .HasValue<Nace2008>("Nace2008")
+            .HasValue<Nace2025>("Nace2025")
             .HasValue<TypeOfAddress>("TypeOfAddress")
-            .HasValue<Status>("Status")
             .HasValue<Classification>("Classification")
             .HasValue<EntityContact>("EntityContact")
             .HasValue<ContactType>("ContactType");
@@ -120,34 +142,32 @@ public class KboDataContext(DbContextOptions<KboDataContext> options) : DbContex
 
     public DbSet<Enterprise> Enterprises { get; set; }
     public DbSet<Establishment> Establishments { get; set; }
-    public DbSet<Activity> Activities { get; set; }
+    public DbSet<Branch> Branches { get; set; }
     public DbSet<Address> Addresses { get; set; }
     public DbSet<Contact> Contacts { get; set; }
     public DbSet<Denomination> Denominations { get; set; }
     public DbSet<Meta> Meta { get; set; }
     public DbSet<Code> Codes { get; set; }
+    public DbSet<TypeOfAddress> TypesOfAddress { get; set; }
     public DbSet<Language> Languages { get; set; }
-    public DbSet<TypeOfEnterprise> TypeOfEnterprises { get; set; }
+    public DbSet<TypeOfEnterprise> TypesOfEnterprise { get; set; }
     public DbSet<JuridicalSituation> JuridicalSituations { get; set; }
     public DbSet<JuridicalForm> JuridicalForms { get; set; }
     public DbSet<ActivityGroup> ActivityGroups { get; set; }
-    public DbSet<TypeOfDenomination> TypeOfDenominations { get; set; }
-    public DbSet<Nace2003> Nace2003s { get; set; }
-    public DbSet<Nace2008> Nace2008s { get; set; }
-    public DbSet<TypeOfAddress> TypeOfAddresses { get; set; }
-    public DbSet<Status> Statuses { get; set; }
+    public DbSet<TypeOfDenomination> TypesOfDenomination { get; set; }
+    public DbSet<Nace2003> Nace2003 { get; set; }
+    public DbSet<Nace2008> Nace2008 { get; set; }
+    public DbSet<Nace2025> Nace2025 { get; set; }
     public DbSet<Classification> Classifications { get; set; }
-    public DbSet<ContactType> ContactTypes { get; set; }
     public DbSet<EntityContact> EntityContacts { get; set; }
+    public DbSet<ContactType> ContactTypes { get; set; }
+
 
 }
 
 public class Enterprise
 {
-    public required string EnterpriseNumber { get; set; } = string.Empty;
-    public int StatusId { get; set; }
-    public Status Status { get; set; } = null!;
-    public string GetStatus(string language) => Status.GetDescription(language);
+    public KboNr EnterpriseNumber { get; set; }
     public required JuridicalSituation JuridicalSituation { get; set; } = null!;
     public string GetJuridicalSituation(string language) => JuridicalSituation.GetDescription(language);
     public required TypeOfEnterprise TypeOfEnterprise { get; set; } = null!;
@@ -157,30 +177,23 @@ public class Enterprise
     public string? GetJuridicalForm(string language) => (JuridicalFormCAC??JuridicalFormCAC)?.GetDescription(language);
     public DateTime StartDate { get; set; }
     public ICollection<Establishment> Establishments { get; set; } = [];
-    public ICollection<Activity> Activities { get; set; } = [];
+    public ICollection<Branch> Branches { get; set; } = [];
 }
 
 public class Establishment
 {
     public required string EstablishmentNumber { get; set; } = string.Empty;
     public DateTime StartDate { get; set; }
-    public required string EnterpriseNumber { get; set; } = string.Empty;
+    public KboNr EnterpriseNumber { get; set; }
     public Enterprise Enterprise { get; set; } = null!;
 }
-
-public class Activity
+public class Branch 
 {
-    public int Id { get; set; }
-    public required string EnterpriseNumber { get; set; } = string.Empty;
-    public ActivityGroup? ActivityGroup { get; set; }
-    public string? GetActivityGroup(string language) => ActivityGroup?.GetDescription(language);
-    public string NaceVersion { get; set; } = string.Empty;
-    public required NaceCode NaceCode { get; set; }
-    public string GetNaceCode(string language) => NaceCode.GetDescription(language);
-    public int NaceCodeId { get; set; }
-    public required Classification Classification { get; set; }
-    public string GetClassification(string language) => Classification.GetDescription(language);
-    public Enterprise? Enterprise { get; set; }
+    public required string Id { get; set; } = string.Empty;
+    public DateTime StartDate { get; set; }
+    public KboNr EnterpriseNumber { get; set; }
+    public required Enterprise Enterprise { get; set; } = null!;
+
 }
 
 public class Address
@@ -261,6 +274,7 @@ public class Code
     }
 }
 
+
 public class CodeDescription
 {
     public int Id { get; set; }
@@ -279,6 +293,7 @@ public class TypeOfDenomination : Code { }
 public abstract class NaceCode: Code { }
 public class Nace2003 : NaceCode { }
 public class Nace2008 : NaceCode { }
+public class Nace2025 : NaceCode { }
 public class TypeOfAddress : Code { }
 public class Status : Code { }
 public class Classification : Code { }

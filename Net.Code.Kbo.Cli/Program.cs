@@ -39,7 +39,7 @@ class Import
     public int Do()
     {
         var services = Setup.ConfigureServices(Database);
-        var import = services.GetRequiredService<BulkImport>();
+        var import = services.GetRequiredService<ImportService>();
         if (!Files.Any())
             return import.ImportAll(Input, Incremental, Limit, BatchSize);
         else
@@ -83,7 +83,7 @@ class Reporting(DataContextFactory factory)
         var context = factory.DataContext();
 
         Console.WriteLine($"Codes: {context.Codes.Count()}");
-        Console.WriteLine($"TypeOfAddresses: {context.TypeOfAddresses.Count()}");
+        Console.WriteLine($"TypeOfAddresses: {context.TypesOfAddress.Count()}");
 
         var items = from x in ReadCsv.FromFile<Net.Code.Kbo.Data.Import.Denomination>(Path.Combine(folder, "denomination.csv"), hasHeaders: true)
                     group x by new { x.EntityNumber, x.TypeOfDenomination, x.Language } into g
@@ -100,7 +100,7 @@ class Reporting(DataContextFactory factory)
             }
         }
 
-        var types = context.TypeOfAddresses.Include(c => c.Descriptions).ToList();
+        var types = context.TypesOfAddress.Include(c => c.Descriptions).ToList();
         foreach (var type in types)
         {
             Console.WriteLine($"{type.Category} - {type.CodeValue}");
