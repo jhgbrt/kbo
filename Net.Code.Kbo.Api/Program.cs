@@ -31,5 +31,23 @@ app.MapGet(
     async (ICompanyService service, KboNr id, [FromQuery]string? language) => await service.GetCompany(id, language))
 .WithName("GetCompany");
 
+app.MapGet(
+    "/companies",
+    async (ICompanyService service,
+        [FromQuery] string? name,
+        [FromQuery] string? street,
+        [FromQuery] string? houseNumber,
+        [FromQuery] string? postalCode,
+        [FromQuery] string? city,
+        [FromQuery] string? language) => await service.SearchCompany(new EntityLookup
+        {
+            Name = name,
+            City = city,
+            PostalCode = postalCode,
+            Street = street,
+            HouseNumber = houseNumber
+        }, language))
+    .WithName("SearchCompany");
+
 app.Run();
 
