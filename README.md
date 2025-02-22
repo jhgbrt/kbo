@@ -24,4 +24,20 @@ This will import Meta, Code, Enterprise, Establishment, Branch, Address, Contact
 
 # API
 
-The API project provides a /companies/{id} api that queries the database for company info.
+The API project provides two operations:
+* GET /companies/{id}[?language=[lang]]
+  retrieves company info by KBO nr (in any valid 10-digit format), if it exists
+  if no company is found with that Id, a 400 Not Found is returned.
+  * id: kbo nr
+  * language (optional): language to return descriptions (e.g. 'name type'). Currently only nl  or fr, and in some cases de are used by the KBO data set.
+* GET /companies?name=[name]&street=[street]&houseNumber=[houseNumber]&postalCode=[postalCode]&city=[city]&skip=[skip]&take=[take]&language=[lang]
+  This returns a list of maximum 25 companies satisfying the criteria.
+  Parameters:
+  * name: company name should contain the given name (case insensitive)
+  * street: street of any address (main/establishment/branch) should contain the given street (case insensitive)
+  * houseNumber: house number of any address (main/establishment/branch) should be equal to this value
+  * postalCode: postal code of any address (main/establishment/branch) should be equal to this value
+  * city: city of any address (main/establishment/branch) should contain the given street (case insensitive)
+  * skip (optional): skip the first [skip] results. Default 0.
+  * take (optional): return at most [take] results. Default 25, can not exceed 25.
+  * language (optional): language to return descriptions (e.g. 'name type'). Currently only nl  or fr, and in some cases de are used by the KBO data set.

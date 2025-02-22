@@ -174,7 +174,7 @@ public class Enterprise
     public string GetTypeOfEnterprise(string language) => TypeOfEnterprise.GetDescription(language);
     public JuridicalForm? JuridicalForm { get; set; }
     public JuridicalForm? JuridicalFormCAC { get; set; }
-    public string? GetJuridicalForm(string language) => (JuridicalFormCAC??JuridicalFormCAC)?.GetDescription(language);
+    public string? GetJuridicalForm(string language) => (JuridicalFormCAC??JuridicalForm)?.GetDescription(language);
     public DateTime StartDate { get; set; }
     public ICollection<Establishment> Establishments { get; set; } = [];
     public ICollection<Branch> Branches { get; set; } = [];
@@ -264,7 +264,7 @@ public class Code
 
     public string GetDescription(string language)
     {
-        ReadOnlySpan<string> languages = [language.ToUpperInvariant(), "EN", "NL", "FR", "DE"];
+        ReadOnlySpan<string> languages = [language.ToUpperInvariant(), "NL", "FR", "EN", "DE"];
         foreach (var l in languages)
         {
             var d = Descriptions.FirstOrDefault(d => d.Language == l);

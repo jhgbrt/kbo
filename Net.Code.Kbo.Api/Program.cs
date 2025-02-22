@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 
 using Net.Code.Kbo;
@@ -28,26 +29,40 @@ app.UseHttpsRedirection();
 
 app.MapGet(
     "/companies/{id}",
-    async (ICompanyService service, KboNr id, [FromQuery]string? language) => await service.GetCompany(id, language))
-.WithName("GetCompany");
+    async Task<Results<Ok<Company>, NotFound>> (
+        ICompanyService service,
+        KboNr id, 
+        [FromQuery]string? language
+        ) => await service.GetCompany(id, language) switch 
+        {
+            null => TypedResults.NotFound(),
+            var result => TypedResults.Ok(result)
+        }
+    ).WithName("GetCompany");
 
 app.MapGet(
     "/companies",
-    async (ICompanyService service,
+    async Task<Results<Ok<Company[]>, NoContent>> (
+        ICompanyService service,
         [FromQuery] string? name,
         [FromQuery] string? street,
         [FromQuery] string? houseNumber,
         [FromQuery] string? postalCode,
         [FromQuery] string? city,
-        [FromQuery] string? language) => await service.SearchCompany(new EntityLookup
+        [FromQuery] string? language
+        ) => await service.SearchCompany(new EntityLookup
         {
             Name = name,
             City = city,
             PostalCode = postalCode,
             Street = street,
             HouseNumber = houseNumber
-        }, language))
-    .WithName("SearchCompany");
+        }, language) switch 
+        {
+            [] => TypedResults.NoContent(),
+            var result => TypedResults.Ok(result)
+        }
+    ).WithName("SearchCompany");
 
 app.Run();
 

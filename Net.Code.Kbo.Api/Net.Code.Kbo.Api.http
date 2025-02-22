@@ -1,5 +1,19 @@
 @Net.Code.Kbo.Api_HostAddress = http://localhost:5063
 
+GET {{Net.Code.Kbo.Api_HostAddress}}/companies/0476.893.174
+
+###
 GET {{Net.Code.Kbo.Api_HostAddress}}/companies/BE0669521714
 
 ###
+GET {{Net.Code.Kbo.Api_HostAddress}}/companies/0476.893.174?language=FR
+
+###
+GET {{Net.Code.Kbo.Api_HostAddress}}/companies/0403.278.488
+
+###
+GET {{Net.Code.Kbo.Api_HostAddress}}/companies?name=kbc&language=NL
+
+###
+
+GET {{Net.Code.Kbo.Api_HostAddress}}/companies?name=mensura&language=NL

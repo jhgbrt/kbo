@@ -1,6 +1,7 @@
 ﻿using LinqKit;
 
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Query;
 
 using System.Linq.Expressions;
 
@@ -18,14 +19,16 @@ class CompanyService(KboDataContext context) : ICompanyService
     {
         language = language?.ToUpperInvariant() ?? "EN";
 
-        var enterprise = await (
-            from e in context.Enterprises
-                .Include(e => e.Establishments)
-                .Include(e => e.Branches)
+        var set = context.Enterprises
                 .Include(e => e.JuridicalForm).ThenInclude(e => e!.Descriptions)
                 .Include(e => e.JuridicalFormCAC).ThenInclude(e => e!.Descriptions)
                 .Include(e => e.JuridicalSituation).ThenInclude(e => e.Descriptions)
                 .Include(e => e.TypeOfEnterprise).ThenInclude(e => e.Descriptions)
+                .Include(e => e.Establishments)
+                .Include(e => e.Branches);
+
+        var enterprise = await (
+            from e in set
             where e.EnterpriseNumber == enterpriseNumber
             select e
             ).FirstOrDefaultAsync();
@@ -68,30 +71,23 @@ class CompanyService(KboDataContext context) : ICompanyService
     }
 
     private static IEnumerable<Branch> GetBranches(Enterprise enterprise, ILookup<string, Address> addresses, ILookup<string, EntityName> entityNames, ILookup<string, ContactInfo> contacts)
-    {
-        var branches = from b in enterprise.Branches
-                       select new Branch(
-                           entityNames[b.Id].ToArray(),
-                           contacts[b.Id].ToArray(),
-                           addresses[b.Id].FirstOrDefault() ?? Address.Empty // branches should always have exactly one address
-                       );
-        return branches;
-    }
+    => from b in enterprise.Branches
+       select new Branch(
+           entityNames[b.Id].ToArray(),
+           contacts[b.Id].ToArray(),
+           addresses[b.Id].FirstOrDefault() ?? Address.Empty // branches should always have exactly one address
+       );
 
     private static IEnumerable<Establishment> GetEstablishments(Enterprise enterprise, ILookup<string, Address> addresses, ILookup<string, EntityName> entityNames, ILookup<string, ContactInfo> contacts)
-    {
-        var establishments = from e in enterprise.Establishments
-                             select new Establishment(
-                                 entityNames[e.EstablishmentNumber].ToArray(),
-                                 contacts[e.EstablishmentNumber].ToArray(),
-                                 addresses[e.EstablishmentNumber].FirstOrDefault() ?? Address.Empty // establishments should always have exactly one address
-                             );
-        return establishments;
-    }
+    => from e in enterprise.Establishments
+       select new Establishment(
+           entityNames[e.EstablishmentNumber].ToArray(),
+           contacts[e.EstablishmentNumber].ToArray(),
+           addresses[e.EstablishmentNumber].FirstOrDefault() ?? Address.Empty // establishments should always have exactly one address
+       );
 
-    private async Task<ILookup<string, ContactInfo>> GetContacts(string language, string[] entityNumbers)
-    {
-        return (await (
+    private async Task<ILookup<string, ContactInfo>> GetContacts(string language, string[] entityNumbers) 
+    => (await (
             from c in context.Contacts
                 .Include(c => c.ContactType).ThenInclude(c => c.Descriptions)
                 .Include(c => c.EntityContact).ThenInclude(c => c.Descriptions)
@@ -106,29 +102,52 @@ class CompanyService(KboDataContext context) : ICompanyService
                     return new ContactInfo(type, value);
                 }
                 );
-    }
 
     private async Task<ILookup<string, EntityName>> GetEntityNames(string language, string[] entityNumbers)
     {
-        return (await (
-            from d in context.Denominations
-                .Include(d => d.TypeOfDenomination).ThenInclude(d => d.Descriptions)
-                .Include(d => d.Language).ThenInclude(d => d.Descriptions)
-            where entityNumbers.Contains(d.EntityNumber)
-            select d
-            ).ToListAsync()).ToLookup(
+
+        var languageId = language switch
+        {
+            "FR" => "1",
+            "NL" => "2",
+            "DE" => "3",
+            "EN" => "4",
+            _ => "2"
+        };
+
+        var list = await (
+                from d in context.Denominations
+                    .Include(d => d.TypeOfDenomination)
+                    .Include(d => d.Language)
+                where entityNumbers.Contains(d.EntityNumber)
+                select d
+                ).ToListAsync();
+
+        var q = from d in list
+                group d by new { d.EntityNumber, d.TypeOfDenomination } into g
+                // find the name in the requested language.
+                // If not found, try Dutch, then French, then the first one
+                let d = g.FirstOrDefault(x => x.Language.CodeValue == languageId)
+                ?? g.FirstOrDefault(x => x.Language.CodeValue == "2")
+                ?? g.FirstOrDefault(x => x.Language.CodeValue == "1")
+                ?? g.First()
+                select d;
+
+
+        return q.ToLookup(
                 d => d.EntityNumber,
-                d =>
-                {
-                    var type = d.GetTypeOfDenomination(language);
-                    return new EntityName(type, d.DenominationValue);
-                }
+                d => new EntityName(d.TypeOfDenomination.CodeValue switch {
+                    "001" => "name",
+                    "002" => "abbreviation",
+                    "003" => "commercialName",
+                    "004" => "branchName",
+                    _ => "unknown"
+                }, d.DenominationValue)
                 );
     }
 
     private async Task<ILookup<string, Address>> GetAddresses(string language, string[] entityNumbers)
-    {
-        return (await (
+    => (await (
             from a in context.Addresses.Include(a => a.TypeOfAddress).ThenInclude(a => a.Descriptions)
             where entityNumbers.Contains(a.EntityNumber)
             select a
@@ -140,7 +159,6 @@ class CompanyService(KboDataContext context) : ICompanyService
                     var (street, number, box, zipcode, municipality) = a.GetAddress(language);
                     return new Address(street, number, box, zipcode, municipality);
                 });
-    }
 
     public async Task<Company[]> SearchCompany(EntityLookup lookup, string? language, int skip = 0, int take = 25)
     {
@@ -163,35 +181,33 @@ class CompanyService(KboDataContext context) : ICompanyService
                      }
                      ).Where(lookup.Predicate).Select(x => x.EntityNumber).Skip(skip).Take(take);
 
-        var foundEntityNumbers = await search.ToArrayAsync(); 
+        var foundEntityNumbers = await search.ToArrayAsync();
+
         // found entities can be branches, establishments or enterprises
+        // branches or establishments are also a subset of all potential branches and establishments (namely, those selected by name)
         var foundEnterpriseNumbers = foundEntityNumbers.Where(s => s.Count(c => c == '.') == 2).Select(KboNr.Parse).ToArray();
         var foundEstablishmentAndBranchNumbers = foundEntityNumbers.Where(s => s.Count(c => c == '.') != 2).ToArray();
 
+        // to get all relevant enterprises, we start by fetching the enterprise numbers for found establishments and branches
         var entitiesAndEnterpriseNumbers = from x in
                 context.Establishments.Select(e => new { e.EnterpriseNumber, EntityNumber = e.EstablishmentNumber }
                 ).Concat(
                 context.Branches.Select(b => new { b.EnterpriseNumber, EntityNumber = b.Id })
                 )
                 where foundEstablishmentAndBranchNumbers.Contains(x.EntityNumber)
-                    || foundEnterpriseNumbers.Contains(x.EnterpriseNumber)
-                select x;
+//                    || foundEnterpriseNumbers.Contains(x.EnterpriseNumber)
+                select x.EnterpriseNumber;
                            
         var establishmentsAndBranches = await entitiesAndEnterpriseNumbers.ToArrayAsync();
 
 
-        var allEntityNumbers = establishmentsAndBranches.Select(e => e.EntityNumber).Concat(foundEntityNumbers).Distinct().ToArray();
-        var addresses = await GetAddresses(language, allEntityNumbers);
-        var entityNames = await GetEntityNames(language, allEntityNumbers);
-        var contacts = await GetContacts(language, allEntityNumbers);
-
         var enterpriseNumbers = Enumerable.Empty<KboNr>()
-            .Concat(establishmentsAndBranches.Select(e => e.EnterpriseNumber))
+            .Concat(establishmentsAndBranches)
             .Concat(foundEnterpriseNumbers)
             .Distinct()
             .ToArray();
 
-        var query = await context.Enterprises
+        var enterprises = await context.Enterprises
             .Include(e => e.Establishments)
             .Include(e => e.Branches)
             .Include(e => e.JuridicalForm).ThenInclude(e => e!.Descriptions)
@@ -201,7 +217,17 @@ class CompanyService(KboDataContext context) : ICompanyService
             .Where(e => enterpriseNumbers.Contains(e.EnterpriseNumber))
             .ToArrayAsync();
 
-        var result = from item in query
+        var allEntityNumbers = (from e in enterprises
+                               let establishmentNumbers = e.Establishments.Select(e => e.EstablishmentNumber)
+                               let branchNumbers = e.Branches.Select(b => b.Id)
+                               from n in new[] { e.EnterpriseNumber.ToString("F") }.Concat(establishmentNumbers).Concat(branchNumbers)
+                               select n).Distinct().ToArray();
+
+        var addresses = await GetAddresses(language, allEntityNumbers);
+        var entityNames = await GetEntityNames(language, allEntityNumbers);
+        var contacts = await GetContacts(language, allEntityNumbers);
+
+        var result = from item in enterprises
                      let key = item.EnterpriseNumber.ToString("F")
                      select new Company(
                          key,

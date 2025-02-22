@@ -25,5 +25,10 @@ public record Address(string Street, string Number, string Box, string PostalCod
     public static Address Empty = new(string.Empty, string.Empty, string.Empty, string.Empty, string.Empty);
 }
 
+/// <summary>
+/// Name of an entity, branch or establishment
+/// </summary>
+/// <param name="Type">The type of the name. 'name' (= legal name), 'abbreviation', 'commercialName' or 'branchName'/// </param>
+/// <param name="Name">The actual name (in the requested language, if available)</param>
 public record EntityName(string Type, string Name);
 public record ContactInfo(string Type, string Value);
