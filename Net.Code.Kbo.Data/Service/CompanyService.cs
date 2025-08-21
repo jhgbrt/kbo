@@ -52,6 +52,8 @@ class CompanyService(KboDataContext context) : ICompanyService
 
             var branches = GetBranches(enterprise, addresses, entityNames, contacts);
 
+            var activities = await GetActivities(language, entityNumbers);
+
             return new Company(
                 key,
                 enterprise.GetJuridicalForm(language) ?? string.Empty,
@@ -61,7 +63,8 @@ class CompanyService(KboDataContext context) : ICompanyService
                 contacts[key].ToArray(),
                 addresses[key].FirstOrDefault() ?? Address.Empty, // enterprise should always have exactly one address
                 establishments.ToArray(),
-                branches.ToArray()
+                branches.ToArray(),
+                activities[key].ToArray()
             );
 
 
@@ -160,6 +163,24 @@ class CompanyService(KboDataContext context) : ICompanyService
                     return new Address(street, number, box, zipcode, municipality);
                 });
 
+    private async Task<ILookup<string, Activity>> GetActivities(string language, string[] entityNumbers)
+    {
+        var list = await (
+                    from a in context.Activities
+                        .Include(a => a.ActivityGroup).ThenInclude(a => a.Descriptions)
+                        .Include(a => a.NaceCode).ThenInclude(a => a.Descriptions)
+                        .Include(a => a.Classification).ThenInclude(a => a.Descriptions)
+                    where entityNumbers.Contains(a.EntityNumber)
+                    select a).ToListAsync();
+
+        var grp = from item in list
+                  let a = new { item.EntityNumber, Activity = new Activity(item.GetClassification(language), item.GetNaceDescription(language)) }
+                  group a by new { a.EntityNumber, a.Activity } into g
+                  select g.FirstOrDefault();
+
+        return grp.ToLookup(a => a.EntityNumber, a => a.Activity);
+    }
+
     public async Task<Company[]> SearchCompany(EntityLookup lookup, string? language, int skip = 0, int take = 25)
     {
         language = language ?? "EN";
@@ -226,6 +247,7 @@ class CompanyService(KboDataContext context) : ICompanyService
         var addresses = await GetAddresses(language, allEntityNumbers);
         var entityNames = await GetEntityNames(language, allEntityNumbers);
         var contacts = await GetContacts(language, allEntityNumbers);
+        var activities = await GetActivities(language, allEntityNumbers);
 
         var result = from item in enterprises
                      let key = item.EnterpriseNumber.ToString("F")
@@ -238,7 +260,8 @@ class CompanyService(KboDataContext context) : ICompanyService
                          contacts[key].ToArray(),
                          addresses[key].FirstOrDefault() ?? Address.Empty, // enterprise should always have exactly one address
                          GetEstablishments(item, addresses, entityNames, contacts).ToArray(),
-                         GetBranches(item, addresses, entityNames, contacts).ToArray()
+                         GetBranches(item, addresses, entityNames, contacts).ToArray(),
+                         activities[key].ToArray()
                      );
 
         return result.ToArray();

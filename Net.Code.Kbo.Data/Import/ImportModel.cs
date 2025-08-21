@@ -360,7 +360,7 @@ Classification      Geeft aan of dit een hoofd-, neven- of hulpactiviteit is. Zi
 
 public class Activity
 {
-    public required string EnterpriseNumber { get; set; } = string.Empty;
+    public required string EntityNumber { get; set; } = string.Empty;
     public string ActivityGroup { get; set; } = string.Empty;
     public string NaceVersion { get; set; } = string.Empty;
     public string NaceCode { get; set; } = string.Empty;

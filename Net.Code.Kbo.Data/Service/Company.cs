@@ -9,7 +9,8 @@ public record Company(
     ContactInfo[] ContactInfo,
     Address MainAddress, 
     Establishment[] Establishments,
-    Branch[] Branches);
+    Branch[] Branches,
+    Activity[] Activities);
 public record Establishment(
 EntityName[] Names,
 ContactInfo[] ContactInfo,
@@ -32,3 +33,4 @@ public record Address(string Street, string Number, string Box, string PostalCod
 /// <param name="Name">The actual name (in the requested language, if available)</param>
 public record EntityName(string Type, string Name);
 public record ContactInfo(string Type, string Value);
+public record Activity(string Type, string Description);

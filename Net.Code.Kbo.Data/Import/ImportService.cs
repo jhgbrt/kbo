@@ -272,15 +272,22 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
             context => context.Contacts,
             items => from item in items
                      let type = types.TryGetValue(item.ContactType, out var t) ? t : null
-                     where type != null
-                     let entityContact = entityContacts[item.EntityContact]
-                     select new Contact
+                     let entityContact = entityContacts.TryGetValue(item.EntityContact, out var e) ? e : null
+                     let success = type != null && entityContact != null
+                     let errorMessage = (type, entityContact) switch
+                     {
+                         (null, null) => $"{item.EntityNumber}: ContactType '{item.ContactType}' and EntityContact '{item.EntityContact}' not found",
+                         (null, _) => $"{item.EntityNumber}: ContactType '{item.ContactType}' not found",
+                         (_, null) => $"{item.EntityNumber}: EntityContact '{item.EntityContact}' not found",
+                         _ => null
+                     }
+                     select (success, item, new Contact
                      {
                          EntityNumber = item.EntityNumber,
                          ContactType = type,
                          EntityContact = entityContact,
                          Value = item.Value
-                     }
+                     }, errorMessage)
         );
     }
 
@@ -314,7 +321,7 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
                      let errormessage = success ? null : $"Invalid references: group={item.ActivityGroup}, classification={item.Classification}, naceVersion={item.NaceVersion}, naceCode={item.NaceCode}"
                      select (success, item, new Activity
                      {
-                         EntityNumber = item.EnterpriseNumber,
+                         EntityNumber = item.EntityNumber,
                          ActivityGroup = grp!,
                          Classification = classification!,
                          NaceCode = nace!
@@ -330,9 +337,11 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
         ) 
         where TEntity : class
     {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         var dbset = set(context);
         dbset.ExecuteDelete();
 
+        using var transaction = context.Database.BeginTransaction();
         batchSize = limit.HasValue ? Math.Max(limit.Value, 100000) : (batchSize ?? 100000);
         logger.LogInformation($"Batch size: {batchSize}");
         var tableName = context.Model.FindEntityType(typeof(TEntity))?.GetTableName() ?? typeof(TEntity).Name;
@@ -347,8 +356,9 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
             {
                 logger.LogWarning($"{page.Length - entities.Count} items could not be imported");
             }
-            logger.LogInformation($"Imported {entities.Count} {tableName} (total: {dbset.Count()})");
+            logger.LogInformation($"Imported {entities.Count} {tableName} (total: {dbset.Count()} - {sw.Elapsed})");
         }
+        transaction.Commit();
         return dbset.Count();
     }
 
@@ -361,31 +371,54 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
         where TEntity : class
     {
         var dbset = set(context);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        using var transaction = context.Database.BeginTransaction();
         dbset.ExecuteDelete();
 
         batchSize = limit.HasValue ? Math.Max(limit.Value, 100000) : (batchSize ?? 100000);
         logger.LogInformation($"Batch size: {batchSize}");
         var tableName = context.Model.FindEntityType(typeof(TEntity))?.GetTableName() ?? typeof(TEntity).Name;
         var n = 0;
+
+        TEntity[] buffer = new TEntity[batchSize.Value];
+        HashSet<string> errors = new HashSet<string>();
+        int bufferIndex = 0;
         foreach (var page in items.Batch(batchSize.Value))
         {
+            Array.Clear(buffer, 0, buffer.Length);
+            
             logger.LogInformation($"Page: {++n} ({page.Length} items)");
-            var entities = ToEntities(page).ToList();
+            var entities = ToEntities(page);
 
-            dbset.AddRange(entities.Where(t => t.success).Select(t => t.target));
+            foreach (var (success, source, target, error) in entities)
+            {
+                if (success)
+                {
+                    buffer[bufferIndex] = target;
+                    bufferIndex++;
+                }
+                else
+                {
+                    if (!string.IsNullOrEmpty(error) && !errors.Contains(error))
+                    {
+                        logger.LogError($"Error importing {typeof(TEntity).Name} from {source}: {error}");
+                        errors.Add(error);
+                    }
+                }
+            }
+
+            var entitiesCount = bufferIndex;
+            dbset.AddRange(buffer[0..entitiesCount]);
             context.SaveChanges();
 
-            foreach (var error in entities.Where(t => !t.success))
+            if (page.Length > bufferIndex - 1)
             {
-                logger.LogError($"error processing {error.source}: {error.error}");
+                logger.LogWarning($"{page.Length - entitiesCount} items could not be imported");
             }
-
-            if (page.Length > entities.Count)
-            {
-                logger.LogWarning($"{page.Length - entities.Count} items could not be imported");
-            }
-            logger.LogInformation($"Imported {entities.Count} {tableName} (total: {dbset.Count()})");
+            logger.LogInformation($"Imported {entitiesCount} {tableName} (total: {dbset.Count()} in {sw.Elapsed})");
         }
+
+        transaction.Commit();
         return dbset.Count();
     }
 
