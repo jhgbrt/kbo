@@ -39,9 +39,11 @@ class Import
     public int Do()
     {
         var services = Setup.ConfigureServices(Database);
-        var import = services.GetRequiredService<ImportService>();
+        var import = services.GetRequiredService<IImportService>();
         if (!Files.Any())
+        {
             return import.ImportAll(Input, Incremental, Limit, BatchSize);
+        }
         else
             return import.ImportFiles(Input, Files, Incremental, Limit, BatchSize);
 }

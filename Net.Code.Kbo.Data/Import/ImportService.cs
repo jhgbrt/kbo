@@ -22,12 +22,15 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
         "branch",
         "address",
         "denomination",
-        "contact"
+        "contact",
+        "activity"
     ];
 
     public int ImportAll(string folder, bool incremental, int? limit, int? batchSize) => ImportFiles(folder, filenames, incremental, limit, batchSize);
     public int ImportFiles(string folder, IEnumerable<string> files, bool incremental, int? limit, int? batchSize)
     {
+        logger.LogInformation($"Importing files from {folder}");
+
         if (!Directory.Exists(folder))
         {
             logger.LogError($"{folder}: Directory not found");
@@ -50,6 +53,7 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
                 "address" => ImportAddresses(folder, incremental, limit, batchSize),
                 "denomination" => ImportDenominations(folder, incremental, limit, batchSize),
                 "contact" => ImportContacts(folder, incremental, limit, batchSize),
+                "activity" => ImportActivities(folder, incremental, limit, batchSize),
                 _ => -1
             };
             if (result == -1)
@@ -181,7 +185,8 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
             batchSize,
             context => context.Establishments,
             items => from item in items
-                     let enterprise = context.Enterprises.Find(item.EnterpriseNumber)
+                     let kbo = KboNr.Parse(item.EnterpriseNumber)
+                     let enterprise = context.Enterprises.Find(kbo)
                      where enterprise != null
                      select new Establishment
                      {
@@ -204,11 +209,12 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
             batchSize,
             context => context.Branches,
             items => from item in items
-                     let enterprise = context.Enterprises.Find(item.EnterpriseNumber)
+                     let kbo = KboNr.Parse(item.EnterpriseNumber)
+                     let enterprise = context.Enterprises.Find(kbo)
                      select new Branch
                      {
                          Id = item.Id,
-                         EnterpriseNumber = KboNr.Parse(item.EnterpriseNumber),
+                         EnterpriseNumber = kbo,
                          Enterprise = enterprise,
                          StartDate = item.StartDate
                      }
@@ -265,7 +271,8 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
             batchSize,
             context => context.Contacts,
             items => from item in items
-                     let type = types[item.ContactType]
+                     let type = types.TryGetValue(item.ContactType, out var t) ? t : null
+                     where type != null
                      let entityContact = entityContacts[item.EntityContact]
                      select new Contact
                      {
@@ -274,6 +281,44 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
                          EntityContact = entityContact,
                          Value = item.Value
                      }
+        );
+    }
+
+    int ImportActivities(string folder, bool incremental, int? limit, int? batchSize)
+    {
+        using var context = factory.DataContext();
+
+        var groups = context.ActivityGroups.ToDictionary(g => g.CodeValue);
+        var classifications = context.Classifications.ToDictionary(c => c.CodeValue);
+        var nace2003 = context.Nace2003.ToDictionary(n => n.CodeValue);
+        var nace2008 = context.Nace2008.ToDictionary(n => n.CodeValue);
+        var nace2025 = context.Nace2025.ToDictionary(n => n.CodeValue);
+
+        return Import(
+            context,
+            Read<Data.Import.Activity>(folder, "activity.csv", limit),
+            limit,
+            batchSize,
+            context => context.Activities,
+            items => from item in items
+                     let grp = groups.TryGetValue(item.ActivityGroup, out var g) ? g : null
+                     let classification = classifications.TryGetValue(item.Classification, out var c) ? c : null
+                     let nace = item.NaceVersion switch
+                     {
+                         "2003" => nace2003.TryGetValue(item.NaceCode, out var n) ? (NaceCode?)n : null,
+                         "2008" => nace2008.TryGetValue(item.NaceCode, out var n) ? (NaceCode?)n : null,
+                         "2025" => nace2025.TryGetValue(item.NaceCode, out var n) ? (NaceCode?)n : null,
+                         _ => null
+                     }
+                     let success = grp != null && classification != null && nace != null
+                     let errormessage = success ? null : $"Invalid references: group={item.ActivityGroup}, classification={item.Classification}, naceVersion={item.NaceVersion}, naceCode={item.NaceCode}"
+                     select (success, item, new Activity
+                     {
+                         EntityNumber = item.EnterpriseNumber,
+                         ActivityGroup = grp!,
+                         Classification = classification!,
+                         NaceCode = nace!
+                     }, errormessage)
         );
     }
 

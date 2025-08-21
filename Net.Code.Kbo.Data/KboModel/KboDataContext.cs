@@ -118,6 +118,16 @@ public class KboDataContext(DbContextOptions<KboDataContext> options) : DbContex
             .HasForeignKey(d => d.LanguageId)
             .HasPrincipalKey(d => d.Id);
 
+        var activity = modelBuilder.Entity<Activity>();
+        activity.HasKey(a => a.Id);
+        activity.Property(a => a.Id).ValueGeneratedOnAdd();
+        activity.HasOne(a => a.ActivityGroup)
+            .WithMany().IsRequired(true);
+        activity.HasOne(a => a.Classification)
+            .WithMany().IsRequired(true);
+        activity.HasOne(a => a.NaceCode)
+            .WithMany().IsRequired(true);
+
         modelBuilder.Entity<Code>()
             .HasDiscriminator(c => c.Category)
             .HasValue<Language>("Language")
@@ -161,6 +171,7 @@ public class KboDataContext(DbContextOptions<KboDataContext> options) : DbContex
     public DbSet<Classification> Classifications { get; set; }
     public DbSet<EntityContact> EntityContacts { get; set; }
     public DbSet<ContactType> ContactTypes { get; set; }
+    public DbSet<Activity> Activities { get; set; }
 
 
 }
@@ -232,6 +243,18 @@ public class Contact
     public required ContactType ContactType { get; set; }
     public string GetContactType(string language) => ContactType.GetDescription(language);
     public string Value { get; set; } = string.Empty;
+}
+
+public class Activity
+{
+    public int Id { get; set; }
+    public required string EntityNumber { get; set; } = string.Empty;
+    public required ActivityGroup ActivityGroup { get; set; }
+    public string GetActivityGroup(string language) => ActivityGroup.GetDescription(language);
+    public required NaceCode NaceCode { get; set; }
+    public string GetNaceDescription(string language) => NaceCode.GetDescription(language);
+    public required Classification Classification { get; set; }
+    public string GetClassification(string language) => Classification.GetDescription(language);
 }
 
 public class Denomination
