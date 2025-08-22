@@ -286,27 +286,28 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
         var n = 0;
 
         TEntity[] buffer = new TEntity[batchSize.Value];
-        HashSet<string> errors = new HashSet<string>();
+        HashSet<string> hash = new HashSet<string>();
         int bufferIndex = 0;
         foreach (var page in items.Batch(batchSize.Value))
         {
             Array.Clear(buffer, 0, buffer.Length);
-            
+
             logger.LogInformation($"Page: {++n} ({page.Length} items)");
 
             foreach (var item in page)
             {
-                var (success, source, target, error) = ToEntity(item);
+                var (success, source, target, errors) = ToEntity(item);
 
                 if (success && target is not null)
                 {
                     buffer[bufferIndex] = target;
                     bufferIndex++;
                 }
-                else if (!string.IsNullOrEmpty(error) && !errors.Contains(error))
+                else foreach (var error in errors)
                 {
+                    if (hash.Contains(error)) continue;
                     logger.LogError($"Error importing {typeof(TEntity).Name} from {source}: {error}");
-                    errors.Add(error);
+                    hash.Add(error);
                 }
             }
 

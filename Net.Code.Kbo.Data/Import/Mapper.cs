@@ -10,20 +10,20 @@ static class Mapper
         bool Success,
         TIn Source,
         TOut? Target,
-        string? Error
+        IList<string> Errors
     );
 
     internal static MapResult<Data.Import.Meta, Meta> MapTo(this Data.Import.Meta item)
     {
         var meta = new Meta { Variable = item.Variable, Value = item.Value };
-        return new(true, item, meta, null);
+        return new(true, item, meta, []);
     }
 
     internal static MapResult<Data.Import.Address, Address> MapTo(this Data.Import.Address item, Dictionary<string, TypeOfAddress> types)
     {
         var type = types.TryGetValue(item.TypeOfAddress, out var t) ? t : null;
         var success = type != null;
-        var errormessage = success ? null : $"TypeOfAddress '{item.TypeOfAddress}' not found";
+        string[] errors = success ? [] : [$"TypeOfAddress '{item.TypeOfAddress}' not found"];
 
         var address = success && type != null ? new Address
         {
@@ -43,7 +43,7 @@ static class Mapper
             DateStrikingOff = item.DateStrikingOff
         } : null;
 
-        return new(success, item, address, errormessage);
+        return new(success, item, address, errors);
     }
 
     internal static MapResult<Data.Import.Enterprise, Enterprise> MapTo(
@@ -56,14 +56,14 @@ static class Mapper
         var juridicalFormCAC = string.IsNullOrWhiteSpace(item.JuridicalFormCAC) ? null : (juridicalForms.TryGetValue(item.JuridicalFormCAC, out var jfc) ? jfc : null);
         var juridicalSituation = juridicalSituations.TryGetValue(item.JuridicalSituation, out var js) ? js : null;
         var typeOfEnterprise = typesOfEnterprises.TryGetValue(item.TypeOfEnterprise, out var te) ? te : null;
-        var success = juridicalSituation != null && typeOfEnterprise != null;
-        var errormessage = (juridicalSituation, typeOfEnterprise) switch
-        {
-            (null, null) => $"JuridicalSituation '{item.JuridicalSituation}' and TypeOfEnterprise '{item.TypeOfEnterprise}' not found",
-            (null, _) => $"JuridicalSituation '{item.JuridicalSituation}' not found",
-            (_, null) => $"TypeOfEnterprise '{item.TypeOfEnterprise}' not found",
-            _ => null
-        };
+
+        List<string> errors = [];
+        if (juridicalSituation == null)
+            errors.Add($"JuridicalSituation '{item.JuridicalSituation}' not found");
+        if (typeOfEnterprise == null)
+            errors.Add($"TypeOfEnterprise '{item.TypeOfEnterprise}' not found");
+
+        var success = !errors.Any();
 
         var entity = success ? new Enterprise
         {
@@ -75,7 +75,7 @@ static class Mapper
             StartDate = item.StartDate
         } : null;
 
-        return new(success, item, entity, errormessage);
+        return new(success, item, entity, errors);
     }
 
     internal static MapResult<Data.Import.Establishment, Establishment> MapTo(
@@ -84,8 +84,10 @@ static class Mapper
     {
         var kbo = KboNr.Parse(item.EnterpriseNumber);
         var enterprise = findEnterprise(kbo);
-        var success = enterprise is not null;
-        var errormessage = success ? null : $"Enterprise '{item.EnterpriseNumber}' not found";
+        List<string> errors = [];
+        if (enterprise == null)
+            errors.Add($"Enterprise '{item.EnterpriseNumber}' not found");
+        var success = !errors.Any();
 
         var est = success ? new Establishment
         {
@@ -95,7 +97,7 @@ static class Mapper
             StartDate = item.StartDate
         } : null;
 
-        return new(success, item, est, errormessage);
+        return new(success, item, est, errors);
     }
 
     internal static MapResult<Data.Import.Branch, Branch> MapTo(
@@ -104,8 +106,11 @@ static class Mapper
     {
         var kbo = KboNr.Parse(item.EnterpriseNumber);
         var enterprise = findEnterprise(kbo);
-        var success = enterprise is not null;
-        var errormessage = success ? null : $"Enterprise '{item.EnterpriseNumber}' not found";
+
+        List<string> errors = [];
+        if (enterprise == null)
+            errors.Add($"Enterprise '{item.EnterpriseNumber}' not found");
+        var success = !errors.Any();
 
         var branch = success ? new Branch
         {
@@ -115,7 +120,7 @@ static class Mapper
             StartDate = item.StartDate
         } : null;
 
-        return new(success, item, branch, errormessage);
+        return new(success, item, branch, errors);
     }
 
     internal static MapResult<Data.Import.Denomination, Denomination> MapTo(
@@ -125,14 +130,13 @@ static class Mapper
     {
         var type = string.IsNullOrWhiteSpace(item.TypeOfDenomination) ? null : (types.TryGetValue(item.TypeOfDenomination, out var t) ? t : null);
         var lang = string.IsNullOrWhiteSpace(item.Language) ? null : (languages.TryGetValue(item.Language, out var l) ? l : null);
-        var success = type != null && lang != null;
-        var errormessage = (type, lang) switch
-        {
-            (null, null) => $"TypeOfDenomination '{item.TypeOfDenomination}' and Language '{item.Language}' not found",
-            (null, _) => $"TypeOfDenomination '{item.TypeOfDenomination}' not found",
-            (_, null) => $"Language '{item.Language}' not found",
-            _ => null
-        };
+
+        List<string> errors = [];
+        if (type == null && !string.IsNullOrWhiteSpace(item.TypeOfDenomination))
+            errors.Add($"TypeOfDenomination '{item.TypeOfDenomination}' not found");
+        if (lang == null && !string.IsNullOrWhiteSpace(item.Language))
+            errors.Add($"Language '{item.Language}' not found");
+        var success = !errors.Any();
 
         var denom = success ? new Denomination
         {
@@ -142,7 +146,7 @@ static class Mapper
             TypeOfDenomination = type!
         } : null;
 
-        return new(success, item, denom, errormessage);
+        return new(success, item, denom, errors);
     }
 
     internal static MapResult<Data.Import.Contact, Contact> MapTo(
@@ -152,14 +156,14 @@ static class Mapper
     {
         var type = types.TryGetValue(item.ContactType, out var t) ? t : null;
         var entityContact = entityContacts.TryGetValue(item.EntityContact, out var e) ? e : null;
-        var success = type != null && entityContact != null;
-        var errormessage = (type, entityContact) switch
-        {
-            (null, null) => $"{item.EntityNumber}: ContactType '{item.ContactType}' and EntityContact '{item.EntityContact}' not found",
-            (null, _) => $"{item.EntityNumber}: ContactType '{item.ContactType}' not found",
-            (_, null) => $"{item.EntityNumber}: EntityContact '{item.EntityContact}' not found",
-            _ => null
-        };
+
+        List<string> errors = [];
+        if (type == null)
+            errors.Add($"ContactType '{item.ContactType}' not found");
+        if (entityContact == null)
+            errors.Add($"EntityContact '{item.EntityContact}' not found");
+
+        var success = !errors.Any();
 
         var contact = success ? new Contact
         {
@@ -169,7 +173,7 @@ static class Mapper
             Value = item.Value
         } : null;
 
-        return new(success, item, contact, errormessage);
+        return new(success, item, contact, errors);
     }
 
     internal static MapResult<Data.Import.Activity, Activity> MapTo(
@@ -189,8 +193,16 @@ static class Mapper
             "2025" => nace2025.TryGetValue(item.NaceCode, out var n25) ? n25 : null,
             _ => null
         };
-        var success = grp != null && classification != null && nace != null;
-        var errormessage = success ? null : $"Invalid references: group={item.ActivityGroup}, classification={item.Classification}, naceVersion={item.NaceVersion}, naceCode={item.NaceCode}";
+
+        List<string> errors = [];
+        if (grp == null)
+            errors.Add($"ActivityGroup '{item.ActivityGroup}' not found");
+        if (classification == null)
+            errors.Add($"Classification '{item.Classification}' not found");
+        if (nace == null)
+            errors.Add($"NaceCode '{item.NaceCode}' for NaceVersion '{item.NaceVersion}' not found");
+
+        var success = !errors.Any();
 
         var activity = success ? new Activity
         {
@@ -200,6 +212,6 @@ static class Mapper
             NaceCode = nace!
         } : null;
 
-        return new(success, item, activity, errormessage);
+        return new(success, item, activity, errors);
     }
 }
