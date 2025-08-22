@@ -3,6 +3,105 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace Net.Code.Kbo.Data.Import;
 
 /*
+1.5. Hoe zijn de bestanden opgebouwd?
+
+Er zijn 2 soorten bestanden:
+- Volledig bestand: bevat alle in hoofdstuk 2 opgesomde gegevens van
+  alle actieve entiteiten en hun actieve vestigingseenheden opgenomen
+  in KBO Open Data (verder "full" bestand genoemd).
+- Update-bestand: bevat de mutaties tussen het laatste en het
+  voorlaatste full bestand.
+
+De eerste keer dat u de gegevens oplaadt, gebruikt u uiteraard het full
+bestand. Om uw databank up-to-date te houden, kan u nadien zelf kiezen
+of u maandelijks telkens opnieuw het full bestand oplaadt of enkel uw
+databank bijwerkt met de wijzigingen van het update bestand.
+
+Bestandsnaamgeving:
+- Full-bestand: KboOpenData_<extractnr>_<jaar>_<maand>_Full.zip
+- Update-bestand: KboOpenData_<extractnr>_<jaar>_<maand>_Update.zip
+
+1.5.1. Het full bestand
+
+De gegevens in het full bestand worden geleverd als ZIP met daarin
+CSV-bestanden:
+- meta.csv: bevat enkele metagegevens over dit full bestand
+  (versienummer, tijdstip van aanmaak, ...).
+- code.csv: bevat de beschrijvingen van de codes die gebruikt worden in
+  de andere bestanden.
+- contact.csv: bevat contactgegevens van entiteiten en
+  vestigingseenheden.
+- enterprise.csv: bevat 1 lijn per entiteit met enkele basisgegevens.
+- establishment.csv: bevat 1 lijn per vestigingseenheid met enkele
+  basisgegevens.
+- activity.csv: bevat 1 lijn per activiteit van een entiteit of
+  vestigingseenheid. Een entiteit of vestigingseenheid kan meerdere
+  activiteiten uitoefenen.
+- address.csv: bevat 0, 1 of 2 lijnen per adres van een entiteit of
+  vestigingseenheid. Voor een geregistreerde entiteit rechtspersoon
+  geven we het adres van de zetel, én – indien van toepassing – het
+  adres van het bijkantoor. Voor een geregistreerde entiteit natuurlijk
+  persoon wordt geen enkel adres gegeven op het niveau van de zetel.
+  Enkel het (de) adres(sen) van de vestigingseenhe(i)d(en) worden
+  gegeven.
+- denomination.csv: bevat 1 lijn per naam van een entiteit,
+  vestigingseenheid of bijkantoor. Een entiteit heeft steeds een naam.
+  Daarnaast kunnen ook een commerciële naam en/of afkorting voorkomen.
+  Een vestigingseenheid heeft soms een commerciële naam. Een bijkantoor
+  kan een naam van het bijkantoor en/of een afkorting hebben.
+- branch.csv: één lijn per bijkantoor is gelinkt aan een buitenlandse
+  entiteit. Opgelet, het ID van een bijkantoor is geen officieel
+  nummer. Dit nummer kan nooit gebruikt worden voor een opzoeking in
+  andere public search producten.
+
+Koppeling:
+- Gegevens kunnen aan elkaar worden gekoppeld m.b.v. het
+  ondernemingsnummer of het vestigingseenheidsnummer.
+- Bestanden zijn zo opgezet dat zij eenvoudig op te laden zijn in een
+  relationele databank.
+- Het is niet noodzakelijk alle bestanden op te laden. Bijvoorbeeld,
+  voor enkel naam en adres zijn activity.csv niet vereist.
+
+CSV-kenmerken:
+- Scheidingsteken: comma ,
+- Tekstafbakening: dubbele quotes "
+- Decimaal punt: .
+- Datumformaat: dd-mm-yyyy
+- Sommige waarden kunnen leeg zijn (NULL). In dat geval volgt direct
+  het volgende scheidingsteken.
+
+1.5.2. Het update bestand
+
+De gegevens in het updatebestand worden geleverd als ZIP met
+CSV-bestanden, gestructureerd zoals in het full bestand.
+
+- meta.csv is aanwezig.
+- code.csv bevat steeds de volledige lijst van codes (niet enkel
+  wijzigingen).
+
+Voor de andere bestanden (enterprise.csv, establishment.csv, ...) zijn
+er 2 types:
+- <name>_delete.csv: entiteiten/vestigingseenheden waarvoor in stap 1
+  gegevens gewist worden.
+- <name>_insert.csv: lijnen die in stap 2 moeten worden toegevoegd.
+
+Voorbeeld (namen):
+- Als in KBO een naam bijkomt, wijzigt of gewist wordt:
+  - het ondernemingsnummer komt in denomination_delete.csv.
+  - alle huidige namen (geen historiek) van deze entiteit komen in
+    denomination_insert.csv (ook niet-gewijzigde namen).
+
+Update-procedure (pseudo-SQL):
+1. Verwijderen:
+   DELETE FROM mydatabase.denomination
+   WHERE entitynumber IN (SELECT entitynumber FROM denomination_delete.csv);
+2. Invoegen:
+   INSERT INTO mydatabase.denomination
+   SELECT * FROM denomination_insert.csv;
+*/
+
+
+/*
 ###################################################################################################
 meta.csv 
 Het bestand meta.csv bevat de volgende variabelen:
@@ -113,10 +212,6 @@ JuridicalSituation | tekst      | XXX                          |  JuridicalSitua
 TypeOfEnterprise   | tekst      | X                            |  TypeOfEnterprise     | ja
 JuridicalForm      | tekst      | XXX                          |  JuridicalForm        | nee*
 JuridicalFormCAC   | tekst      | XXX                          |  JuridicalForm        | nee**
-StartDate          | datum      | dd-mm-yyyy                   |                       | ja
-* verplicht voor entiteiten rechtspersoon; komt niet voor bij entiteiten natuurlijk persoon
-** Bevat de de rechtsvorm zoals deze gelezen/beschouwd moet worden, in afwachting van het 
-   aanpassen van de statuten conform het Wetboek van Vennootschappen en Verenigingen (WVV).
 
 EnterpriseNumber    Het ondernemingsnummer.
 Status              De Status van de entiteit. In dit bestand is dit steeds ‘AC’ : actief.
@@ -125,12 +220,7 @@ TypeOfEnterprise    Type entiteit: entiteit rechtspersoon1 of entiteit natuurlij
 JuridicalForm       De rechtsvorm van de entiteit, indien het een entiteit rechtspersoon betreft. Zie codetabel.
 JuridicalFormCAC    Bevat de de rechtsvorm zoals deze gelezen/beschouwd moet worden, in afwachting van het 
                     aanpassen van de statuten conform het Wetboek van Vennootschappen en Verenigingen (WVV).
-StartDate           De begindatum van de entiteit. Voor entiteiten rechtspersoon is dit de begindatum 
-                    van de eerste rechtstoestand met status bekendgemaakt of actief. Voor entiteiten 
-                    natuurlijk persoon is dit de begindatum van de laatste periode waarin de entiteit 
-                    zich in status bekendgemaakt of actief bevindt.
 */
-
 /// <summary>
 /// Entiteit met enkele basisgegevens
 /// </summary>

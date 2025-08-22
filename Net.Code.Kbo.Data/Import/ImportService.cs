@@ -6,7 +6,6 @@ using Net.Code.Kbo.Data;
 
 
 namespace Net.Code.Kbo;
-
 public interface IImportService
 {
     int ImportAll(string folder, bool incremental, int? limit, int? batchSize);
@@ -74,13 +73,16 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
     {
         using var context = factory.DataContext();
 
-        return Import(
+        return Import<Data.Import.Meta, Meta>(
             context,
-            Read<Data.Import.Meta>(folder, "meta.csv", null),
+            folder,
+            baseName: "meta",
+            incremental: false,
             null,
             null,
-            context => context.Meta,
-            items => from item in items select new Meta { Variable = item.Variable, Value = item.Value }
+            context.Meta,
+            item => item.MapTo(),
+            (set, keys) => set.Where(_ => false)
         );
     }
 
@@ -113,32 +115,16 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
         using var context = factory.DataContext();
         var types = context.TypesOfAddress.ToDictionary(t => t.CodeValue);
 
-        return Import(
+        return Import<Data.Import.Address, Address>(
             context,
-            Read<Data.Import.Address>(folder, "address.csv", limit),
+            folder,
+            baseName: "address",
+            incremental,
             limit,
             batchSize,
-            context => context.Addresses,
-            items => from item in items
-                     let type = types[item.TypeOfAddress]
-                     where type != null
-                     select new Address
-                     {
-                         EntityNumber = item.EntityNumber,
-                         TypeOfAddress = type,
-                         TypeOfAddressId = type.Id,
-                         CountryNL = item.CountryNL ?? string.Empty,
-                         CountryFR = item.CountryFR ?? string.Empty,
-                         Zipcode = item.Zipcode ?? string.Empty,
-                         MunicipalityNL = item.MunicipalityNL ?? string.Empty,
-                         MunicipalityFR = item.MunicipalityFR ?? string.Empty,
-                         StreetNL = item.StreetNL ?? string.Empty,
-                         StreetFR = item.StreetFR ?? string.Empty,
-                         HouseNumber = item.HouseNumber ?? string.Empty,
-                         Box = item.Box ?? string.Empty,
-                         ExtraAddressInfo = item.ExtraAddressInfo ?? string.Empty,
-                         DateStrikingOff = item.DateStrikingOff
-                     }
+            context.Addresses,
+            item => item.MapTo(types),
+            (set, keys) => set.Where(a => keys.Contains(a.EntityNumber))
         );
     }
 
@@ -150,51 +136,38 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
         var juridicalSituations = context.JuridicalSituations.ToDictionary(j => j.CodeValue);
         var typesOfEnterprises = context.TypesOfEnterprise.ToDictionary(t => t.CodeValue);
 
-        return Import(
+        return Import<Data.Import.Enterprise, Enterprise>(
             context,
-            Read<Data.Import.Enterprise>(folder, "enterprise.csv", limit),
+            folder,
+            baseName: "enterprise",
+            incremental,
             limit,
             batchSize,
-            context => context.Enterprises,
-            page => from item in page
-                    let juridicalForm = item.JuridicalForm is null ? null : juridicalForms[item.JuridicalForm]
-                    let juridicalFormCAC = item.JuridicalFormCAC is null ? null : juridicalForms[item.JuridicalFormCAC]
-                    let juridicalSituation = juridicalSituations[item.JuridicalSituation]
-                    let typeOfEnterprise = typesOfEnterprises[item.TypeOfEnterprise]
-                    where typeOfEnterprise != null
-                    select new Enterprise
-                    {
-                        EnterpriseNumber = KboNr.Parse(item.EnterpriseNumber),
-                        JuridicalSituation = juridicalSituation,
-                        TypeOfEnterprise = typeOfEnterprise,
-                        JuridicalForm = juridicalForm,
-                        JuridicalFormCAC = juridicalFormCAC,
-                        StartDate = item.StartDate
-                    });
+            context.Enterprises,
+            item => item.MapTo(juridicalForms, juridicalSituations, typesOfEnterprises),
+            (set, keys) =>
+            {
+                var parsed = keys.Where(KboNr.IsValid).Select(KboNr.Parse).ToArray();
+                return set.Where(e => parsed.Contains(e.EnterpriseNumber));
+            }
+        );
     }
 
-  
+
     public int ImportEstablishments(string folder, bool incremental, int? limit, int? batchSize)
     {
         using var context = factory.DataContext();
 
-        return Import(
+        return Import<Data.Import.Establishment, Establishment>(
             context,
-            Read<Data.Import.Establishment>(folder, "establishment.csv", limit),
+            folder,
+            baseName: "establishment",
+            incremental,
             limit,
             batchSize,
-            context => context.Establishments,
-            items => from item in items
-                     let kbo = KboNr.Parse(item.EnterpriseNumber)
-                     let enterprise = context.Enterprises.Find(kbo)
-                     where enterprise != null
-                     select new Establishment
-                     {
-                         EnterpriseNumber = KboNr.Parse(item.EnterpriseNumber),
-                         Enterprise = enterprise,
-                         EstablishmentNumber = item.EstablishmentNumber,
-                         StartDate = item.StartDate,
-                     }
+            context.Establishments,
+            item => item.MapTo(kbo => context.Enterprises.Find(kbo)),
+            (set, keys) => set.Where(e => keys.Contains(e.EstablishmentNumber))
         );
     }
 
@@ -202,22 +175,16 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
     {
         using var context = factory.DataContext();
 
-        return Import(
+        return Import<Data.Import.Branch, Branch>(
             context,
-            Read<Data.Import.Branch>(folder, "branch.csv", limit),
+            folder,
+            baseName: "branch",
+            incremental,
             limit,
             batchSize,
-            context => context.Branches,
-            items => from item in items
-                     let kbo = KboNr.Parse(item.EnterpriseNumber)
-                     let enterprise = context.Enterprises.Find(kbo)
-                     select new Branch
-                     {
-                         Id = item.Id,
-                         EnterpriseNumber = kbo,
-                         Enterprise = enterprise,
-                         StartDate = item.StartDate
-                     }
+            context.Branches,
+            item => item.MapTo(kbo => context.Enterprises.Find(kbo)),
+            (set, keys) => set.Where(b => keys.Contains(b.Id))
         );
     }
 
@@ -229,34 +196,19 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
         var types = context.TypesOfDenomination.ToDictionary(t => t.CodeValue);
         var languages = context.Languages.ToDictionary(l => l.CodeValue);
 
-        return Import(
+        return Import<Data.Import.Denomination, Denomination>(
             context,
-            Read<Data.Import.Denomination>(folder, "denomination.csv", limit),
+            folder,
+            baseName: "denomination",
+            incremental,
             limit,
             batchSize,
-            context => context.Denominations,
-            items => from item in items
-                     let type = item.TypeOfDenomination is null ? null : types[item.TypeOfDenomination]
-                     let lang = item.Language is null ? null : languages[item.Language]
-                     let success = type != null && lang != null
-                     let errormessage = (type, lang) switch 
-                     {
-                         (null, null) => $"TypeOfDenomination '{item.TypeOfDenomination}' and Language '{item.Language}' not found",
-                         (null, _) => $"TypeOfDenomination '{item.TypeOfDenomination}' not found",
-                         (_, null) => $"Language '{item.Language}' not found",
-                         _ => null
-                     }
-                     select (success, item, new Denomination
-                     {
-                         DenominationValue = item.DenominationValue,
-                         Language = lang,
-                         EntityNumber = item.EntityNumber,
-                         TypeOfDenomination = type
-                     }, 
-                     errormessage)
+            context.Denominations,
+            item => item.MapTo(types, languages),
+            (set, keys) => set.Where(d => keys.Contains(d.EntityNumber))
         );
     }
-       
+
     int ImportContacts(string folder, bool incremental, int? limit, int? batchSize)
     {
         using var context = factory.DataContext();
@@ -264,30 +216,16 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
         var types = context.ContactTypes.ToDictionary(t => t.CodeValue);
         var entityContacts = context.EntityContacts.ToDictionary(e => e.CodeValue);
 
-        return Import(
+        return Import<Data.Import.Contact, Contact>(
             context,
-            Read<Data.Import.Contact>(folder, "contact.csv", limit),
+            folder,
+            baseName: "contact",
+            incremental,
             limit,
             batchSize,
-            context => context.Contacts,
-            items => from item in items
-                     let type = types.TryGetValue(item.ContactType, out var t) ? t : null
-                     let entityContact = entityContacts.TryGetValue(item.EntityContact, out var e) ? e : null
-                     let success = type != null && entityContact != null
-                     let errorMessage = (type, entityContact) switch
-                     {
-                         (null, null) => $"{item.EntityNumber}: ContactType '{item.ContactType}' and EntityContact '{item.EntityContact}' not found",
-                         (null, _) => $"{item.EntityNumber}: ContactType '{item.ContactType}' not found",
-                         (_, null) => $"{item.EntityNumber}: EntityContact '{item.EntityContact}' not found",
-                         _ => null
-                     }
-                     select (success, item, new Contact
-                     {
-                         EntityNumber = item.EntityNumber,
-                         ContactType = type,
-                         EntityContact = entityContact,
-                         Value = item.Value
-                     }, errorMessage)
+            context.Contacts,
+            item => item.MapTo(types, entityContacts),
+            (set, keys) => set.Where(c => keys.Contains(c.EntityNumber))
         );
     }
 
@@ -301,79 +239,46 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
         var nace2008 = context.Nace2008.ToDictionary(n => n.CodeValue);
         var nace2025 = context.Nace2025.ToDictionary(n => n.CodeValue);
 
-        return Import(
+        return Import<Data.Import.Activity, Activity>(
             context,
-            Read<Data.Import.Activity>(folder, "activity.csv", limit),
+            folder,
+            baseName: "activity",
+            incremental,
             limit,
             batchSize,
-            context => context.Activities,
-            items => from item in items
-                     let grp = groups.TryGetValue(item.ActivityGroup, out var g) ? g : null
-                     let classification = classifications.TryGetValue(item.Classification, out var c) ? c : null
-                     let nace = item.NaceVersion switch
-                     {
-                         "2003" => nace2003.TryGetValue(item.NaceCode, out var n) ? (NaceCode?)n : null,
-                         "2008" => nace2008.TryGetValue(item.NaceCode, out var n) ? (NaceCode?)n : null,
-                         "2025" => nace2025.TryGetValue(item.NaceCode, out var n) ? (NaceCode?)n : null,
-                         _ => null
-                     }
-                     let success = grp != null && classification != null && nace != null
-                     let errormessage = success ? null : $"Invalid references: group={item.ActivityGroup}, classification={item.Classification}, naceVersion={item.NaceVersion}, naceCode={item.NaceCode}"
-                     select (success, item, new Activity
-                     {
-                         EntityNumber = item.EntityNumber,
-                         ActivityGroup = grp!,
-                         Classification = classification!,
-                         NaceCode = nace!
-                     }, errormessage)
+            context.Activities,
+            item => item.MapTo(groups, classifications, nace2003, nace2008, nace2025),
+            (set, keys) => set.Where(a => keys.Contains(a.EntityNumber))
         );
     }
 
     private int Import<TData, TEntity>(
         KboDataContext context,
-        IEnumerable<TData> items,
+        string folder,
+        string baseName,
+        bool incremental,
         int? limit, int? batchSize,
-        Func<KboDataContext, DbSet<TEntity>> set, Func<IEnumerable<TData>, IEnumerable<TEntity>> ToEntities
-        ) 
-        where TEntity : class
+        DbSet<TEntity> dbset,
+        Func<TData, Mapper.MapResult<TData, TEntity>> ToEntity,
+        Func<DbSet<TEntity>, IEnumerable<string>, IQueryable<TEntity>> deletePredicate
+        ) where TEntity : class
     {
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        var dbset = set(context);
-        dbset.ExecuteDelete();
+        var items = Read<TData>(folder, incremental ? $"{baseName}_insert.csv" : $"{baseName}.csv", limit);
+        IEnumerable<string>? deleteKeys = incremental ? ReadDeleteKeysSync(folder, $"{baseName}_delete.csv").Distinct().ToArray() : null;
 
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         using var transaction = context.Database.BeginTransaction();
-        batchSize = limit.HasValue ? Math.Max(limit.Value, 100000) : (batchSize ?? 100000);
-        logger.LogInformation($"Batch size: {batchSize}");
-        var tableName = context.Model.FindEntityType(typeof(TEntity))?.GetTableName() ?? typeof(TEntity).Name;
-        var n = 0;
-        foreach (var page in items.Batch(batchSize.Value))
+
+        if (!incremental)
         {
-            logger.LogInformation($"Page: {++n} ({page.Length} items)");
-            var entities = ToEntities(page).ToList();
-            dbset.AddRange(entities);
-            context.SaveChanges();
-            if (page.Length > entities.Count)
-            {
-                logger.LogWarning($"{page.Length - entities.Count} items could not be imported");
-            }
-            logger.LogInformation($"Imported {entities.Count} {tableName} (total: {dbset.Count()} - {sw.Elapsed})");
+            dbset.ExecuteDelete();
         }
-        transaction.Commit();
-        return dbset.Count();
-    }
-
-    private int Import<TData, TEntity>(
-        KboDataContext context,
-        IEnumerable<TData> items,
-        int? limit, int? batchSize,
-        Func<KboDataContext, DbSet<TEntity>> set, Func<IEnumerable<TData>, IEnumerable<(bool success, TData source, TEntity target, string error)>> ToEntities
-        )
-        where TEntity : class
-    {
-        var dbset = set(context);
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        using var transaction = context.Database.BeginTransaction();
-        dbset.ExecuteDelete();
+        else if (deleteKeys is not null && deleteKeys.Any())
+        {
+            var query = deletePredicate(dbset, deleteKeys);
+            var deleted = query.ExecuteDelete();
+            logger.LogInformation($"Deleted {deleted} {typeof(TEntity).Name} for incremental update");
+        }
 
         batchSize = limit.HasValue ? Math.Max(limit.Value, 100000) : (batchSize ?? 100000);
         logger.LogInformation($"Batch size: {batchSize}");
@@ -388,22 +293,20 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
             Array.Clear(buffer, 0, buffer.Length);
             
             logger.LogInformation($"Page: {++n} ({page.Length} items)");
-            var entities = ToEntities(page);
 
-            foreach (var (success, source, target, error) in entities)
+            foreach (var item in page)
             {
-                if (success)
+                var (success, source, target, error) = ToEntity(item);
+
+                if (success && target is not null)
                 {
                     buffer[bufferIndex] = target;
                     bufferIndex++;
                 }
-                else
+                else if (!string.IsNullOrEmpty(error) && !errors.Contains(error))
                 {
-                    if (!string.IsNullOrEmpty(error) && !errors.Contains(error))
-                    {
-                        logger.LogError($"Error importing {typeof(TEntity).Name} from {source}: {error}");
-                        errors.Add(error);
-                    }
+                    logger.LogError($"Error importing {typeof(TEntity).Name} from {source}: {error}");
+                    errors.Add(error);
                 }
             }
 
@@ -411,25 +314,40 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
             dbset.AddRange(buffer[0..entitiesCount]);
             context.SaveChanges();
 
-            if (page.Length > bufferIndex - 1)
+            if (page.Length > entitiesCount)
             {
                 logger.LogWarning($"{page.Length - entitiesCount} items could not be imported");
             }
             logger.LogInformation($"Imported {entitiesCount} {tableName} (total: {dbset.Count()} in {sw.Elapsed})");
+            bufferIndex = 0;
         }
 
         transaction.Commit();
         return dbset.Count();
     }
 
-
     private IEnumerable<T> Read<T>(string folder, string fileName, int? limit)
     {
-        var items = ReadCsv.FromFile<T>(Path.Combine(folder, fileName), hasHeaders: true);
+        var path = Path.Combine(folder, fileName);
+        if (!File.Exists(path)) yield break;
+        var items = ReadCsv.FromFile<T>(path, hasHeaders: true);
         if (limit.HasValue)
             items = items.Take(limit.Value);
-        return items;
+        foreach (var item in items)
+            yield return item;
+    }
+
+    private IEnumerable<string> ReadDeleteKeysSync(string folder, string fileName)
+    {
+        var path = Path.Combine(folder, fileName);
+        if (!File.Exists(path)) yield break;
+        using var reader = new StreamReader(path);
+        reader.ReadLine();
+        string? line;
+        while ((line = reader.ReadLine()) is not null)
+        {
+            yield return line.Trim('\"');
+        }
     }
 
 }
-

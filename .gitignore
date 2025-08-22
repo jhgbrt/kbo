@@ -367,3 +367,4 @@ data.db
 /Net.Code.Kbo.Cli/data.db-shm
 /Net.Code.Kbo.Cli/data.db-wal
 data/
+/test/import
