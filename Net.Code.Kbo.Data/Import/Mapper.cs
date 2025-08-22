@@ -28,7 +28,6 @@ static class Mapper
         var address = success && type != null ? new Address
         {
             EntityNumber = item.EntityNumber,
-            TypeOfAddress = type,
             TypeOfAddressId = type.Id,
             CountryNL = item.CountryNL ?? string.Empty,
             CountryFR = item.CountryFR ?? string.Empty,
@@ -68,10 +67,10 @@ static class Mapper
         var entity = success ? new Enterprise
         {
             EnterpriseNumber = KboNr.Parse(item.EnterpriseNumber),
-            JuridicalSituation = juridicalSituation!,
-            TypeOfEnterprise = typeOfEnterprise!,
-            JuridicalForm = juridicalForm,
-            JuridicalFormCAC = juridicalFormCAC,
+            JuridicalSituationId = juridicalSituation!.Id,
+            TypeOfEnterpriseId = typeOfEnterprise!.Id,
+            JuridicalFormId = juridicalForm?.Id,
+            JuridicalFormCACId = juridicalFormCAC?.Id,
             StartDate = item.StartDate
         } : null;
 
@@ -79,48 +78,33 @@ static class Mapper
     }
 
     internal static MapResult<Data.Import.Establishment, Establishment> MapTo(
-        this Data.Import.Establishment item,
-        Func<KboNr, Enterprise?> findEnterprise)
+        this Data.Import.Establishment item)
     {
         var kbo = KboNr.Parse(item.EnterpriseNumber);
-        var enterprise = findEnterprise(kbo);
-        List<string> errors = [];
-        if (enterprise == null)
-            errors.Add($"Enterprise '{item.EnterpriseNumber}' not found");
-        var success = !errors.Any();
 
-        var est = success ? new Establishment
+        var est = new Establishment
         {
             EnterpriseNumber = kbo,
-            Enterprise = enterprise!,
             EstablishmentNumber = item.EstablishmentNumber,
             StartDate = item.StartDate
-        } : null;
+        };
 
-        return new(success, item, est, errors);
+        return new(true, item, est, []);
     }
 
     internal static MapResult<Data.Import.Branch, Branch> MapTo(
-        this Data.Import.Branch item,
-        Func<KboNr, Enterprise?> findEnterprise)
+        this Data.Import.Branch item)
     {
         var kbo = KboNr.Parse(item.EnterpriseNumber);
-        var enterprise = findEnterprise(kbo);
 
-        List<string> errors = [];
-        if (enterprise == null)
-            errors.Add($"Enterprise '{item.EnterpriseNumber}' not found");
-        var success = !errors.Any();
-
-        var branch = success ? new Branch
+        var branch = new Branch
         {
             Id = item.Id,
             EnterpriseNumber = kbo,
-            Enterprise = enterprise!,
             StartDate = item.StartDate
-        } : null;
+        };
 
-        return new(success, item, branch, errors);
+        return new(true, item, branch, []);
     }
 
     internal static MapResult<Data.Import.Denomination, Denomination> MapTo(
@@ -141,9 +125,9 @@ static class Mapper
         var denom = success ? new Denomination
         {
             DenominationValue = item.DenominationValue,
-            Language = lang!,
+            LanguageId = lang!.Id,
             EntityNumber = item.EntityNumber,
-            TypeOfDenomination = type!
+            TypeOfDenominationId = type!.Id
         } : null;
 
         return new(success, item, denom, errors);
@@ -168,8 +152,8 @@ static class Mapper
         var contact = success ? new Contact
         {
             EntityNumber = item.EntityNumber,
-            ContactType = type!,
-            EntityContact = entityContact!,
+            ContactTypeId = type!.Id,
+            EntityContactId = entityContact!.Id,
             Value = item.Value
         } : null;
 
@@ -207,9 +191,9 @@ static class Mapper
         var activity = success ? new Activity
         {
             EntityNumber = item.EntityNumber,
-            ActivityGroup = grp!,
-            Classification = classification!,
-            NaceCode = nace!
+            ActivityGroupId = grp!.Id,
+            ClassificationId = classification!.Id,
+            NaceCodeId = nace!.Id
         } : null;
 
         return new(success, item, activity, errors);

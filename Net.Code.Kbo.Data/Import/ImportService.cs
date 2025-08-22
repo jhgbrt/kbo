@@ -13,6 +13,9 @@ public interface IImportService
 }
 public class ImportService(DataContextFactory factory, ILogger<ImportService> logger) : IImportService
 {
+    // Result of a single import operation
+    public readonly record struct ImportResult(int Imported, int Errors, TimeSpan Duration);
+
     static readonly string[] filenames = [
         "meta",
         "code",
@@ -36,8 +39,10 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
             return 1;
         }
 
+        var overallSw = System.Diagnostics.Stopwatch.StartNew();
+        int totalImported = 0;
+        int totalErrors = 0;
 
-        int total = 0;
         foreach (var f in files)
         {
             logger.LogInformation($"Importing {f}.csv");
@@ -53,23 +58,25 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
                 "denomination" => ImportDenominations(folder, incremental, limit, batchSize),
                 "contact" => ImportContacts(folder, incremental, limit, batchSize),
                 "activity" => ImportActivities(folder, incremental, limit, batchSize),
-                _ => -1
+                _ => new ImportResult(-1, 0, TimeSpan.Zero)
             };
-            if (result == -1)
+            if (result.Imported == -1)
             {
                 logger.LogError($"Unrecognized data filename: '{f}.csv' does not exist");
             }
             else
             {
-                logger.LogInformation($"Imported {result} records from {f}.csv");
+                logger.LogInformation($"Imported {result.Imported} records from {f}.csv in {result.Duration.ToShortString()}. Errors: {result.Errors}");
+                totalImported += result.Imported;
+                totalErrors += result.Errors;
             }
-            total += result;
-
         }
-        return total;
+
+        logger.LogInformation($"Totals - Imported: {totalImported}, Errors: {totalErrors}, Time: {overallSw.Elapsed.ToShortString()} - {totalImported/overallSw.Elapsed.TotalSeconds:0} rows/s");
+        return totalImported;
     }
 
-    int ImportMeta(string folder)
+    ImportResult ImportMeta(string folder)
     {
         using var context = factory.DataContext();
 
@@ -80,15 +87,16 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
             incremental: false,
             null,
             null,
-            context.Meta,
+            c => c.Meta,
             item => item.MapTo(),
             (set, keys) => set.Where(_ => false)
         );
     }
 
-    int ImportCodes(string folder)
+    ImportResult ImportCodes(string folder)
     {
         using var context = factory.DataContext();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         var items = Read<Data.Import.Code>(folder, "code.csv", null);
 
         var entities = from item in items
@@ -104,16 +112,20 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
                            }).ToList()
                        };
 
-        context.Codes.AddRange(entities);
+        var entityList = entities.ToList();
+        var imported = entityList.Sum(e => e.Descriptions.Count);
+        context.Codes.AddRange(entityList);
         context.SaveChanges();
-        return context.Codes.SelectMany(c => c.Descriptions).Count();
+        return new ImportResult(imported, 0, sw.Elapsed);
     }
 
 
-    int ImportAddresses(string folder, bool incremental, int? limit, int? batchSize)
+    ImportResult ImportAddresses(string folder, bool incremental, int? limit, int? batchSize)
     {
         using var context = factory.DataContext();
-        var types = context.TypesOfAddress.ToDictionary(t => t.CodeValue);
+        var types = context.TypesOfAddress.AsNoTracking().ToDictionary(t => t.CodeValue);
+
+        context.Dispose();
 
         return Import<Data.Import.Address, Address>(
             context,
@@ -122,19 +134,22 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
             incremental,
             limit,
             batchSize,
-            context.Addresses,
+            c => c.Addresses,
             item => item.MapTo(types),
             (set, keys) => set.Where(a => keys.Contains(a.EntityNumber))
         );
     }
 
-    int ImportEnterprises(string folder, bool incremental, int? limit, int? batchSize)
+    ImportResult ImportEnterprises(string folder, bool incremental, int? limit, int? batchSize)
     {
         using var context = factory.DataContext();
+        
 
-        var juridicalForms = context.JuridicalForms.ToList().ToDictionary(j => j.CodeValue);
-        var juridicalSituations = context.JuridicalSituations.ToDictionary(j => j.CodeValue);
-        var typesOfEnterprises = context.TypesOfEnterprise.ToDictionary(t => t.CodeValue);
+        var juridicalForms = context.JuridicalForms.AsNoTracking().ToDictionary(j => j.CodeValue);
+        var juridicalSituations = context.JuridicalSituations.AsNoTracking().ToDictionary(j => j.CodeValue);
+        var typesOfEnterprises = context.TypesOfEnterprise.AsNoTracking().ToDictionary(t => t.CodeValue);
+
+        context.Dispose();
 
         return Import<Data.Import.Enterprise, Enterprise>(
             context,
@@ -143,7 +158,7 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
             incremental,
             limit,
             batchSize,
-            context.Enterprises,
+            c => c.Enterprises,
             item => item.MapTo(juridicalForms, juridicalSituations, typesOfEnterprises),
             (set, keys) =>
             {
@@ -154,7 +169,7 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
     }
 
 
-    public int ImportEstablishments(string folder, bool incremental, int? limit, int? batchSize)
+    public ImportResult ImportEstablishments(string folder, bool incremental, int? limit, int? batchSize)
     {
         using var context = factory.DataContext();
 
@@ -165,13 +180,13 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
             incremental,
             limit,
             batchSize,
-            context.Establishments,
-            item => item.MapTo(kbo => context.Enterprises.Find(kbo)),
+            c => c.Establishments,
+            item => item.MapTo(),
             (set, keys) => set.Where(e => keys.Contains(e.EstablishmentNumber))
         );
     }
 
-    public int ImportBranches(string folder, bool incremental, int? limit, int? batchSize)
+    public ImportResult ImportBranches(string folder, bool incremental, int? limit, int? batchSize)
     {
         using var context = factory.DataContext();
 
@@ -182,19 +197,21 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
             incremental,
             limit,
             batchSize,
-            context.Branches,
-            item => item.MapTo(kbo => context.Enterprises.Find(kbo)),
+            c => c.Branches,
+            item => item.MapTo(),
             (set, keys) => set.Where(b => keys.Contains(b.Id))
         );
     }
 
 
-    int ImportDenominations(string folder, bool incremental, int? limit, int? batchSize)
+    ImportResult ImportDenominations(string folder, bool incremental, int? limit, int? batchSize)
     {
         using var context = factory.DataContext();
 
-        var types = context.TypesOfDenomination.ToDictionary(t => t.CodeValue);
-        var languages = context.Languages.ToDictionary(l => l.CodeValue);
+        var types = context.TypesOfDenomination.AsNoTracking().ToDictionary(t => t.CodeValue);
+        var languages = context.Languages.AsNoTracking().ToDictionary(l => l.CodeValue);
+
+        context.Dispose();
 
         return Import<Data.Import.Denomination, Denomination>(
             context,
@@ -203,18 +220,20 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
             incremental,
             limit,
             batchSize,
-            context.Denominations,
+            c => c.Denominations,
             item => item.MapTo(types, languages),
             (set, keys) => set.Where(d => keys.Contains(d.EntityNumber))
         );
     }
 
-    int ImportContacts(string folder, bool incremental, int? limit, int? batchSize)
+    ImportResult ImportContacts(string folder, bool incremental, int? limit, int? batchSize)
     {
         using var context = factory.DataContext();
 
-        var types = context.ContactTypes.ToDictionary(t => t.CodeValue);
-        var entityContacts = context.EntityContacts.ToDictionary(e => e.CodeValue);
+        var types = context.ContactTypes.AsNoTracking().ToDictionary(t => t.CodeValue);
+        var entityContacts = context.EntityContacts.AsNoTracking().ToDictionary(e => e.CodeValue);
+
+        context.Dispose();
 
         return Import<Data.Import.Contact, Contact>(
             context,
@@ -223,21 +242,23 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
             incremental,
             limit,
             batchSize,
-            context.Contacts,
+            c => c.Contacts,
             item => item.MapTo(types, entityContacts),
             (set, keys) => set.Where(c => keys.Contains(c.EntityNumber))
         );
     }
 
-    int ImportActivities(string folder, bool incremental, int? limit, int? batchSize)
+    ImportResult ImportActivities(string folder, bool incremental, int? limit, int? batchSize)
     {
         using var context = factory.DataContext();
 
-        var groups = context.ActivityGroups.ToDictionary(g => g.CodeValue);
-        var classifications = context.Classifications.ToDictionary(c => c.CodeValue);
-        var nace2003 = context.Nace2003.ToDictionary(n => n.CodeValue);
-        var nace2008 = context.Nace2008.ToDictionary(n => n.CodeValue);
-        var nace2025 = context.Nace2025.ToDictionary(n => n.CodeValue);
+        var groups = context.ActivityGroups.AsNoTracking().ToDictionary(g => g.CodeValue);
+        var classifications = context.Classifications.AsNoTracking().ToDictionary(c => c.CodeValue);
+        var nace2003 = context.Nace2003.AsNoTracking().ToDictionary(n => n.CodeValue);
+        var nace2008 = context.Nace2008.AsNoTracking().ToDictionary(n => n.CodeValue);
+        var nace2025 = context.Nace2025.AsNoTracking().ToDictionary(n => n.CodeValue);
+
+        context.Dispose();
 
         return Import<Data.Import.Activity, Activity>(
             context,
@@ -246,28 +267,34 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
             incremental,
             limit,
             batchSize,
-            context.Activities,
+            c => c.Activities,
             item => item.MapTo(groups, classifications, nace2003, nace2008, nace2025),
             (set, keys) => set.Where(a => keys.Contains(a.EntityNumber))
         );
     }
 
-    private int Import<TData, TEntity>(
-        KboDataContext context,
+    private ImportResult Import<TData, TEntity>(
+        KboDataContext context1,
         string folder,
         string baseName,
         bool incremental,
         int? limit, int? batchSize,
-        DbSet<TEntity> dbset,
+        Func<KboDataContext,DbSet<TEntity>> getDbSet,
         Func<TData, Mapper.MapResult<TData, TEntity>> ToEntity,
         Func<DbSet<TEntity>, IEnumerable<string>, IQueryable<TEntity>> deletePredicate
         ) where TEntity : class
     {
-        var items = Read<TData>(folder, incremental ? $"{baseName}_insert.csv" : $"{baseName}.csv", limit);
+        using var context = factory.DataContext();
+        var dbset = getDbSet(context);
+
+        var fileName = incremental ? $"{baseName}_insert.csv" : $"{baseName}.csv";
+        var path = Path.Combine(folder, fileName);
+        var estimatedTotal = EstimateTotalDataLines(path, limit);
+
+        var items = Read<TData>(folder, fileName, limit);
         IEnumerable<string>? deleteKeys = incremental ? ReadDeleteKeysSync(folder, $"{baseName}_delete.csv").Distinct().ToArray() : null;
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        using var transaction = context.Database.BeginTransaction();
 
         if (!incremental)
         {
@@ -283,16 +310,18 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
         batchSize = limit.HasValue ? Math.Max(limit.Value, 100000) : (batchSize ?? 100000);
         logger.LogInformation($"Batch size: {batchSize}");
         var tableName = context.Model.FindEntityType(typeof(TEntity))?.GetTableName() ?? typeof(TEntity).Name;
-        var n = 0;
+
+        if (estimatedTotal > 0)
+            logger.LogInformation($"Estimated rows for {fileName}: ~{estimatedTotal:N0}");
 
         TEntity[] buffer = new TEntity[batchSize.Value];
         HashSet<string> hash = new HashSet<string>();
         int bufferIndex = 0;
+        int imported = 0;
+        int errorCount = 0;
         foreach (var page in items.Batch(batchSize.Value))
         {
             Array.Clear(buffer, 0, buffer.Length);
-
-            logger.LogInformation($"Page: {++n} ({page.Length} items)");
 
             foreach (var item in page)
             {
@@ -305,6 +334,7 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
                 }
                 else foreach (var error in errors)
                 {
+                    errorCount++;
                     if (hash.Contains(error)) continue;
                     logger.LogError($"Error importing {typeof(TEntity).Name} from {source}: {error}");
                     hash.Add(error);
@@ -315,18 +345,68 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
             dbset.AddRange(buffer[0..entitiesCount]);
             context.SaveChanges();
 
+            imported += entitiesCount;
+
             if (page.Length > entitiesCount)
             {
                 logger.LogWarning($"{page.Length - entitiesCount} items could not be imported");
             }
-            logger.LogInformation($"Imported {entitiesCount} {tableName} (total: {dbset.Count()} in {sw.Elapsed})");
+
+            if (estimatedTotal > 0)
+            {
+                var processed = Math.Min(imported, estimatedTotal);
+                var pct = (int)Math.Clamp(Math.Round(processed * 100.0 / estimatedTotal), 0, 100);
+                logger.LogInformation($"Progress {pct}% ({processed:N0}/{estimatedTotal:N0}) - {tableName} - elapsed {sw.Elapsed.ToShortString()} ({estimatedTotal/sw.Elapsed.TotalSeconds:0} rows/s)");
+            }
+            else
+            {
+                logger.LogInformation($"Imported {entitiesCount} {tableName} (run total: {imported} in {sw.Elapsed.ToShortString()} - {entitiesCount/sw.Elapsed.TotalSeconds:0} rows/s)");
+            }
+
             bufferIndex = 0;
         }
 
-        transaction.Commit();
-        return dbset.Count();
+
+        return new ImportResult(imported, errorCount, sw.Elapsed);
     }
 
+    private static long EstimateTotalDataLines(string path, int? limit)
+    {
+        var fi = new FileInfo(path);
+        if (!fi.Exists || fi.Length == 0) return 0;
+
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var reader = new StreamReader(fs, detectEncodingFromByteOrderMarks: true);
+
+        // Read header (skip)
+        string? header = reader.ReadLine();
+        if (header is null) return 0;
+        var encoding = reader.CurrentEncoding;
+        int newlineBytes = encoding.GetByteCount(Environment.NewLine);
+        long headerBytes = encoding.GetByteCount(header) + newlineBytes;
+
+        // Sample first 100 data lines
+        long sampleBytes = 0;
+        int sampleCount = 0;
+        while (sampleCount < 100)
+        {
+            var line = reader.ReadLine();
+            if (line is null) return sampleCount; // eof
+            sampleBytes += encoding.GetByteCount(line) + newlineBytes;
+            sampleCount++;
+        }
+
+        // Long file: estimate based on average bytes/line and file size (excluding header)
+        double avgBytesPerLine = sampleBytes / (double)sampleCount;
+        long dataBytes = Math.Max(0, fi.Length - headerBytes);
+
+        var result = (long)Math.Ceiling(dataBytes / avgBytesPerLine);
+
+        if (limit.HasValue)
+            return Math.Min(result, limit.Value);
+
+        return result;
+    }
     private IEnumerable<T> Read<T>(string folder, string fileName, int? limit)
     {
         var path = Path.Combine(folder, fileName);
