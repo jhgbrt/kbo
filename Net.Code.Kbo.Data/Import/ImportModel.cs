@@ -301,7 +301,7 @@ public class Address
     public string Box { get; set; } = string.Empty;
     public string ExtraAddressInfo { get; set; } = string.Empty;
     [CsvFormat("dd-MM-yyyy")]
-    public DateTime DateStrikingOff { get; set; }
+    public DateTime? DateStrikingOff { get; set; }
 }
 
 /*

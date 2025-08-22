@@ -231,7 +231,7 @@ public class Address
     public string HouseNumber { get; set; } = string.Empty;
     public string Box { get; set; } = string.Empty;
     public string ExtraAddressInfo { get; set; } = string.Empty;
-    public DateTime DateStrikingOff { get; set; }
+    public DateTime? DateStrikingOff { get; set; }
 }
 
 public class Contact
