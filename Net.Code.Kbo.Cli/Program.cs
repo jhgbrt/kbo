@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 using Net.Code.Kbo;
 using CommandLine;
@@ -33,19 +34,25 @@ class Import
     public IEnumerable<string> Files { get; set; } = [];
     [Option('l', "limit", Required = false, HelpText = "Limit the number of records to import.")]
     public int? Limit { get; set; }
-    [Option('b', "batchsize", Required = false, HelpText = "Batch size for bulk import.")]
-    public int? BatchSize { get; set; }
 
     public int Do()
     {
         var services = Setup.ConfigureServices(Database);
+        // Reduce log noise to keep progress output readable
+        var loggerFactory = services.GetRequiredService<ILoggerFactory>();
+        foreach (var provider in loggerFactory.GetType().GetFields(System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)) { }
+
         var import = services.GetRequiredService<IImportService>();
+        var reporter = new ConsoleImportReporter(Input, Database, Incremental, Limit);
+        using var cts = new CancellationTokenSource();
+        Console.CancelKeyPress += (s, e) => { e.Cancel = true; cts.Cancel(); };
+
         if (!Files.Any())
         {
-            return import.ImportAll(Input, Incremental, Limit, BatchSize);
+            return import.ImportAll(Input, Incremental, Limit, reporter, cts.Token);
         }
         else
-            return import.ImportFiles(Input, Files, Incremental, Limit, BatchSize);
+            return import.ImportFiles(Input, Files, Incremental, Limit, reporter, cts.Token);
 }
 }
 
@@ -63,7 +70,7 @@ class Init
     }
 }
 
-[Verb("report", HelpText = "Reportd.")]
+[Verb("report", HelpText = "Report")]
 class Report
 {
     [Option('d', "database", Required = false, HelpText = "Path to the SQLite database file. Default 'data.db'", Default = "data.db")]

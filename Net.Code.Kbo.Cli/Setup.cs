@@ -21,15 +21,14 @@ static class Setup
         if (connectionString is null) throw new InvalidOperationException("Connection string not found");
         services.AddLogging(l =>
         {
+            l.ClearProviders();
             l.AddSimpleConsole(options => {
                 options.SingleLine = true;
                 options.TimestampFormat = "hh:mm:ss ";
                 options.UseUtcTimestamp = true;
                 options.ColorBehavior = LoggerColorBehavior.Enabled;
-            }
-            );
-            //l.AddFilter("Microsoft", LogLevel.Warning);
-            //l.AddFilter("System", LogLevel.Error);
+            });
+            l.SetMinimumLevel(LogLevel.Warning); // warning+
         });
         services.AddTransient<Reporting>();
         services.AddImportService(connectionString);
