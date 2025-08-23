@@ -1,6 +1,7 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
+using Net.Code.ADONet;
 using Net.Code.Csv;
 using Net.Code.Kbo.Data;
 
@@ -13,8 +14,10 @@ public interface IImportService
 }
 public class ImportService(DataContextFactory factory, ILogger<ImportService> logger) : IImportService
 {
+    private readonly CodeCache codeCache = new CodeCache(factory);
+    private readonly IDb db = new Db(factory.DataContext().Database.GetDbConnection(), DbConfig.FromProviderFactory(Microsoft.Data.Sqlite.SqliteFactory.Instance));
     // Result of a single import operation
-    public readonly record struct ImportResult(int Imported, int Errors, TimeSpan Duration);
+    public readonly record struct ImportResult(int Imported, int Deleted, int Errors, TimeSpan Duration);
 
     static readonly string[] filenames = [
         "meta",
@@ -39,14 +42,18 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
             return 1;
         }
 
+        db.Connect();
+        db.Sql("PRAGMA journal_mode=WAL;").AsNonQuery();
+        db.Sql("PRAGMA synchronous=NORMAL;").AsNonQuery();
+        db.Sql("PRAGMA temp_store=MEMORY;").AsNonQuery();
+        db.Sql("PRAGMA cache_size=-200000;").AsNonQuery();
+
         var overallSw = System.Diagnostics.Stopwatch.StartNew();
         int totalImported = 0;
         int totalErrors = 0;
 
         foreach (var f in files)
         {
-            logger.LogInformation($"Importing {f}.csv");
-
             var result = f switch
             {
                 "meta" => ImportMeta(folder),
@@ -58,7 +65,7 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
                 "denomination" => ImportDenominations(folder, incremental, limit, batchSize),
                 "contact" => ImportContacts(folder, incremental, limit, batchSize),
                 "activity" => ImportActivities(folder, incremental, limit, batchSize),
-                _ => new ImportResult(-1, 0, TimeSpan.Zero)
+                _ => new ImportResult(-1, 0, 0, TimeSpan.Zero)
             };
             if (result.Imported == -1)
             {
@@ -78,18 +85,13 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
 
     ImportResult ImportMeta(string folder)
     {
-        using var context = factory.DataContext();
-
-        return Import<Data.Import.Meta, Meta>(
-            context,
+        return ImportRawSql<Data.Import.Meta, Tables.Meta>(
             folder,
             baseName: "meta",
             incremental: false,
-            null,
-            null,
-            c => c.Meta,
-            item => item.MapTo(),
-            (set, keys) => set.Where(_ => false)
+            limit: null,
+            KeyName: nameof(Tables.Meta.Variable),
+            MapToTable: item => Tables.Meta.MapFrom(item)
         );
     }
 
@@ -116,258 +118,175 @@ public class ImportService(DataContextFactory factory, ILogger<ImportService> lo
         var imported = entityList.Sum(e => e.Descriptions.Count);
         context.Codes.AddRange(entityList);
         context.SaveChanges();
-        return new ImportResult(imported, 0, sw.Elapsed);
+        return new ImportResult(imported, 0, 0, sw.Elapsed);
     }
 
 
     ImportResult ImportAddresses(string folder, bool incremental, int? limit, int? batchSize)
     {
-        using var context = factory.DataContext();
-        var types = context.TypesOfAddress.AsNoTracking().ToDictionary(t => t.CodeValue);
-
-        context.Dispose();
-
-        return Import<Data.Import.Address, Address>(
-            context,
+        return ImportRawSql<Data.Import.Address, Tables.Addresses>(
             folder,
             baseName: "address",
-            incremental,
-            limit,
-            batchSize,
-            c => c.Addresses,
-            item => item.MapTo(types),
-            (set, keys) => set.Where(a => keys.Contains(a.EntityNumber))
+            incremental: incremental,
+            limit: limit,
+            KeyName: nameof(Tables.Addresses.EntityNumber),
+            MapToTable: item => Tables.Addresses.MapFrom(item, codeCache)
         );
     }
 
     ImportResult ImportEnterprises(string folder, bool incremental, int? limit, int? batchSize)
     {
-        using var context = factory.DataContext();
-        
-
-        var juridicalForms = context.JuridicalForms.AsNoTracking().ToDictionary(j => j.CodeValue);
-        var juridicalSituations = context.JuridicalSituations.AsNoTracking().ToDictionary(j => j.CodeValue);
-        var typesOfEnterprises = context.TypesOfEnterprise.AsNoTracking().ToDictionary(t => t.CodeValue);
-
-        context.Dispose();
-
-        return Import<Data.Import.Enterprise, Enterprise>(
-            context,
+        return ImportRawSql<Data.Import.Enterprise, Tables.Enterprises>(
             folder,
             baseName: "enterprise",
-            incremental,
-            limit,
-            batchSize,
-            c => c.Enterprises,
-            item => item.MapTo(juridicalForms, juridicalSituations, typesOfEnterprises),
-            (set, keys) =>
-            {
-                var parsed = keys.Where(KboNr.IsValid).Select(KboNr.Parse).ToArray();
-                return set.Where(e => parsed.Contains(e.EnterpriseNumber));
-            }
+            incremental: incremental,
+            limit: limit,
+            KeyName: nameof(Tables.Enterprises.EnterpriseNumber),
+            MapToTable: item => Tables.Enterprises.MapFrom(item, codeCache)
         );
     }
 
 
     public ImportResult ImportEstablishments(string folder, bool incremental, int? limit, int? batchSize)
     {
-        using var context = factory.DataContext();
-
-        return Import<Data.Import.Establishment, Establishment>(
-            context,
+        return ImportRawSql<Data.Import.Establishment, Tables.Establishments>(
             folder,
             baseName: "establishment",
-            incremental,
-            limit,
-            batchSize,
-            c => c.Establishments,
-            item => item.MapTo(),
-            (set, keys) => set.Where(e => keys.Contains(e.EstablishmentNumber))
+            incremental: incremental,
+            limit: limit,
+            KeyName: nameof(Tables.Establishments.EstablishmentNumber),
+            MapToTable: item => Tables.Establishments.MapFrom(item)
         );
     }
 
     public ImportResult ImportBranches(string folder, bool incremental, int? limit, int? batchSize)
     {
-        using var context = factory.DataContext();
-
-        return Import<Data.Import.Branch, Branch>(
-            context,
+        return ImportRawSql<Data.Import.Branch, Tables.Branches>(
             folder,
             baseName: "branch",
-            incremental,
-            limit,
-            batchSize,
-            c => c.Branches,
-            item => item.MapTo(),
-            (set, keys) => set.Where(b => keys.Contains(b.Id))
+            incremental: incremental,
+            limit: limit,
+            KeyName: nameof(Tables.Branches.Id),
+            MapToTable: item => Tables.Branches.MapFrom(item)
         );
     }
 
 
     ImportResult ImportDenominations(string folder, bool incremental, int? limit, int? batchSize)
     {
-        using var context = factory.DataContext();
-
-        var types = context.TypesOfDenomination.AsNoTracking().ToDictionary(t => t.CodeValue);
-        var languages = context.Languages.AsNoTracking().ToDictionary(l => l.CodeValue);
-
-        context.Dispose();
-
-        return Import<Data.Import.Denomination, Denomination>(
-            context,
+        return ImportRawSql<Data.Import.Denomination, Tables.Denominations>(
             folder,
             baseName: "denomination",
-            incremental,
-            limit,
-            batchSize,
-            c => c.Denominations,
-            item => item.MapTo(types, languages),
-            (set, keys) => set.Where(d => keys.Contains(d.EntityNumber))
+            incremental: incremental,
+            limit: limit,
+            KeyName: nameof(Tables.Denominations.EntityNumber),
+            MapToTable: item => Tables.Denominations.MapFrom(item, codeCache)
         );
     }
 
     ImportResult ImportContacts(string folder, bool incremental, int? limit, int? batchSize)
     {
-        using var context = factory.DataContext();
-
-        var types = context.ContactTypes.AsNoTracking().ToDictionary(t => t.CodeValue);
-        var entityContacts = context.EntityContacts.AsNoTracking().ToDictionary(e => e.CodeValue);
-
-        context.Dispose();
-
-        return Import<Data.Import.Contact, Contact>(
-            context,
+        return ImportRawSql<Data.Import.Contact, Tables.Contacts>(
             folder,
             baseName: "contact",
-            incremental,
-            limit,
-            batchSize,
-            c => c.Contacts,
-            item => item.MapTo(types, entityContacts),
-            (set, keys) => set.Where(c => keys.Contains(c.EntityNumber))
+            incremental: incremental,
+            limit: limit,
+            KeyName: nameof(Tables.Contacts.EntityNumber),
+            MapToTable: item => Tables.Contacts.MapFrom(item, codeCache)
         );
     }
 
     ImportResult ImportActivities(string folder, bool incremental, int? limit, int? batchSize)
     {
-        using var context = factory.DataContext();
-
-        var groups = context.ActivityGroups.AsNoTracking().ToDictionary(g => g.CodeValue);
-        var classifications = context.Classifications.AsNoTracking().ToDictionary(c => c.CodeValue);
-        var nace2003 = context.Nace2003.AsNoTracking().ToDictionary(n => n.CodeValue);
-        var nace2008 = context.Nace2008.AsNoTracking().ToDictionary(n => n.CodeValue);
-        var nace2025 = context.Nace2025.AsNoTracking().ToDictionary(n => n.CodeValue);
-
-        context.Dispose();
-
-        return Import<Data.Import.Activity, Activity>(
-            context,
+        return ImportRawSql<Data.Import.Activity, Tables.Activities>(
             folder,
             baseName: "activity",
-            incremental,
-            limit,
-            batchSize,
-            c => c.Activities,
-            item => item.MapTo(groups, classifications, nace2003, nace2008, nace2025),
-            (set, keys) => set.Where(a => keys.Contains(a.EntityNumber))
+            incremental: incremental,
+            limit: limit,
+            KeyName: nameof(Tables.Activities.EntityNumber),
+            item => Tables.Activities.MapFrom(item, codeCache)
         );
     }
 
-    private ImportResult Import<TData, TEntity>(
-        KboDataContext context1,
-        string folder,
-        string baseName,
-        bool incremental,
-        int? limit, int? batchSize,
-        Func<KboDataContext,DbSet<TEntity>> getDbSet,
-        Func<TData, Mapper.MapResult<TData, TEntity>> ToEntity,
-        Func<DbSet<TEntity>, IEnumerable<string>, IQueryable<TEntity>> deletePredicate
-        ) where TEntity : class
+    private ImportResult ImportRawSql<TImport, TTable>(
+       string folder,
+       string baseName,
+       bool incremental,
+       int? limit,
+       string KeyName,
+       Func<TImport, MapResult<TImport, TTable>> MapToTable
+       ) where TTable : class
     {
-        using var context = factory.DataContext();
-        var dbset = getDbSet(context);
+        static MapResult<TImport, TTable> ProcessMappedItem(long estimatedTotal, MapResult<TImport, TTable> mapped, ref int imports, ref int errors, ref int lastPct, ILogger<ImportService> logger, System.Diagnostics.Stopwatch sw)
+        {
+            if (!mapped.Success)
+            {
+                errors++;
+            }
+            else if (mapped.Target is not null)
+            {
+                imports++;
+            }
+            if (estimatedTotal > 0)
+            {
+                var processed = Math.Min(imports, (int)estimatedTotal);
+                var pct = (int)Math.Clamp(Math.Round(processed * 100.0 / estimatedTotal), 0, 100);
+                if (processed % 100000 == 0)
+                {
+                    logger.LogInformation($"{typeof(TTable).Name} progress {pct}% ({processed:N0}/{estimatedTotal:N0}) - elapsed {sw.Elapsed.ToShortString()} - {estimatedTotal / sw.Elapsed.TotalSeconds:0} rows/s");
+                }
+                lastPct = pct;
+            }
+            return mapped;
+        }
+        var tableName = typeof(TTable).Name;
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        int deleted = 0;
+
+        if (!incremental)
+        {
+            deleted = db.Sql($"SELECT COUNT(*) FROM {tableName};").AsScalar<int>();
+            var create = db.Sql($"SELECT sql FROM sqlite_master WHERE type = 'table' AND name = '{tableName}';").AsScalar<string>();
+            if (string.IsNullOrEmpty(create))
+                throw new InvalidOperationException($"Table {tableName} not found in database");
+            db.Sql($"DROP TABLE {tableName}").AsNonQuery();
+            db.Sql(create).AsNonQuery();
+        }
+        else 
+        {
+            IEnumerable<string>? deleteKeys = ReadDeleteKeysSync(folder, $"{baseName}_delete.csv");
+
+            db.Sql("CREATE TEMP TABLE ToDelete (Key TEXT PRIMARY KEY);").AsNonQuery();
+            db.Insert(deleteKeys.Select(x => new Tables.ToDelete { Key = x }));
+            deleted = db.Sql($"DELETE FROM {tableName} WHERE {KeyName} in (SELECT Key FROM ToDelete);").AsNonQuery();
+            db.Sql("DROP TABLE ToDelete;").AsNonQuery();
+            logger.LogInformation($"Deleted {deleted} {tableName} for incremental update");
+        }
+
+
+        using var tx = db.Connection.BeginTransaction();
+
+        int imports = 0;
+        int errors = 0;
+        int lastPct = -1;
 
         var fileName = incremental ? $"{baseName}_insert.csv" : $"{baseName}.csv";
         var path = Path.Combine(folder, fileName);
         var estimatedTotal = EstimateTotalDataLines(path, limit);
+        var items = Read<TImport>(folder, fileName, limit);
 
-        var items = Read<TData>(folder, fileName, limit);
-        IEnumerable<string>? deleteKeys = incremental ? ReadDeleteKeysSync(folder, $"{baseName}_delete.csv").Distinct().ToArray() : null;
+        logger.LogInformation($"Importing {tableName} from {fileName}, estimated rows: ~{estimatedTotal:N0}");
 
-        var sw = System.Diagnostics.Stopwatch.StartNew();
+        db.Insert(
+            from item in items
+            let mapped = ProcessMappedItem(estimatedTotal, MapToTable(item), ref imports, ref errors, ref lastPct, logger, sw)
+            where mapped.Success && mapped.Target is not null
+            select mapped.Target
+            );
 
-        if (!incremental)
-        {
-            dbset.ExecuteDelete();
-        }
-        else if (deleteKeys is not null && deleteKeys.Any())
-        {
-            var query = deletePredicate(dbset, deleteKeys);
-            var deleted = query.ExecuteDelete();
-            logger.LogInformation($"Deleted {deleted} {typeof(TEntity).Name} for incremental update");
-        }
-
-        batchSize = limit.HasValue ? Math.Max(limit.Value, 100000) : (batchSize ?? 100000);
-        logger.LogInformation($"Batch size: {batchSize}");
-        var tableName = context.Model.FindEntityType(typeof(TEntity))?.GetTableName() ?? typeof(TEntity).Name;
-
-        if (estimatedTotal > 0)
-            logger.LogInformation($"Estimated rows for {fileName}: ~{estimatedTotal:N0}");
-
-        TEntity[] buffer = new TEntity[batchSize.Value];
-        HashSet<string> hash = new HashSet<string>();
-        int bufferIndex = 0;
-        int imported = 0;
-        int errorCount = 0;
-        foreach (var page in items.Batch(batchSize.Value))
-        {
-            Array.Clear(buffer, 0, buffer.Length);
-
-            foreach (var item in page)
-            {
-                var (success, source, target, errors) = ToEntity(item);
-
-                if (success && target is not null)
-                {
-                    buffer[bufferIndex] = target;
-                    bufferIndex++;
-                }
-                else foreach (var error in errors)
-                {
-                    errorCount++;
-                    if (hash.Contains(error)) continue;
-                    logger.LogError($"Error importing {typeof(TEntity).Name} from {source}: {error}");
-                    hash.Add(error);
-                }
-            }
-
-            var entitiesCount = bufferIndex;
-            dbset.AddRange(buffer[0..entitiesCount]);
-            context.SaveChanges();
-
-            imported += entitiesCount;
-
-            if (page.Length > entitiesCount)
-            {
-                logger.LogWarning($"{page.Length - entitiesCount} items could not be imported");
-            }
-
-            if (estimatedTotal > 0)
-            {
-                var processed = Math.Min(imported, estimatedTotal);
-                var pct = (int)Math.Clamp(Math.Round(processed * 100.0 / estimatedTotal), 0, 100);
-                logger.LogInformation($"Progress {pct}% ({processed:N0}/{estimatedTotal:N0}) - {tableName} - elapsed {sw.Elapsed.ToShortString()} ({estimatedTotal/sw.Elapsed.TotalSeconds:0} rows/s)");
-            }
-            else
-            {
-                logger.LogInformation($"Imported {entitiesCount} {tableName} (run total: {imported} in {sw.Elapsed.ToShortString()} - {entitiesCount/sw.Elapsed.TotalSeconds:0} rows/s)");
-            }
-
-            bufferIndex = 0;
-        }
-
-
-        return new ImportResult(imported, errorCount, sw.Elapsed);
+        tx.Commit();
+        return new ImportResult(imports, deleted, errors, sw.Elapsed);
     }
 
     private static long EstimateTotalDataLines(string path, int? limit)
