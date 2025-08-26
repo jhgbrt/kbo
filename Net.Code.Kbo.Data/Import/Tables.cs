@@ -106,7 +106,7 @@ static class Tables
         public DateTime StartDate { get; set; }
         public required string EnterpriseNumber { get; set; }
 
-        public static MapResult<Data.Import.Establishment, Establishments> MapFrom(Data.Import.Establishment item)
+        public static MapResult<Data.Import.Establishment, Establishments> MapFrom(Data.Import.Establishment item, CodeCache codeCache)
         {
             var est = new Establishments
             {
@@ -124,7 +124,7 @@ static class Tables
         public DateTime StartDate { get; set; }
         public required string EnterpriseNumber { get; set; }
 
-        public static MapResult<Data.Import.Branch, Branches> MapFrom(Data.Import.Branch item)
+        public static MapResult<Data.Import.Branch, Branches> MapFrom(Data.Import.Branch item, CodeCache codeCache)
         {
             var branch = new Branches
             {
@@ -255,7 +255,7 @@ static class Tables
         public required string Variable { get; set; }
         public string Value { get; set; } = string.Empty;
 
-        public static MapResult<Data.Import.Meta, Meta> MapFrom(Data.Import.Meta item)
+        public static MapResult<Data.Import.Meta, Meta> MapFrom(Data.Import.Meta item, CodeCache codeCache)
         {
             var meta = new Meta { Variable = item.Variable, Value = item.Value };
             return new(true, item, meta, []);

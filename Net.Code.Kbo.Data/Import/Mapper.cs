@@ -2,7 +2,7 @@
 
 
 namespace Net.Code.Kbo;
-record struct MapResult<TIn, TOut>
+internal record struct MapResult<TIn, TOut>
    (
        bool Success,
        TIn Source,

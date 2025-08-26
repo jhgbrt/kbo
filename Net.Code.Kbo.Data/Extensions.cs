@@ -1,6 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-
+using Net.Code.ADONet;
 using Net.Code.Kbo.Data.Service;
 
 namespace Net.Code.Kbo.Data;
@@ -18,6 +18,13 @@ public static class Extensions
     {
         services.AddSingleton(new DataContextFactory(connectionString));
         services.AddDbContext<KboDataContext>(options => options.UseSqlite(connectionString));
+        
+        // Configure Net.Code.ADONet with System.Data.SQLite for progress reporting
+        services.AddTransient<IDb>(provider => 
+        {
+            return new Db(connectionString, System.Data.SQLite.SQLiteFactory.Instance);
+        });
+        services.AddTransient<ImportHelper>();
         services.AddTransient<IImportService, ImportService>();
         return services;
     }

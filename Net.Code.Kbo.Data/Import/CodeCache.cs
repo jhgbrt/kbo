@@ -5,7 +5,7 @@ using Net.Code.Kbo.Data;
 
 namespace Net.Code.Kbo;
 
-class CodeCache
+internal class CodeCache
 {
     KboDataContext context;
     public CodeCache(DataContextFactory factory)

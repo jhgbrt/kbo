@@ -2,7 +2,7 @@
   "profiles": {
     "Net.Code.Kbo.Tui": {
       "commandName": "Project",
-      "commandLineArgs": "import -n -f activity -i ..\\test\\import\\update\\ -b 2000000",
+      "commandLineArgs": "import -i ..\\test\\import\\full\\",
       "workingDirectory": "$(ProjectDir)"
     }
   }

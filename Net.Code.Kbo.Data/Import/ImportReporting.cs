@@ -1,29 +1,27 @@
 namespace Net.Code.Kbo;
 
-public readonly record struct ImportPlan(
+public readonly record struct PipelineData(
     string Folder,
     bool Incremental,
     int? Limit,
-    IReadOnlyList<TablePlan> Tables,
+    IReadOnlyList<PipelineStepData> Tasks,
     long TotalEstimatedRows
 );
 
-public readonly record struct TablePlan(
-    string TableName,
-    string FileName,
-    bool Incremental,
+public readonly record struct PipelineStepData(
+    string TaskLabel,
     long EstimatedTotal
 );
 
-public readonly record struct TableProgress(
-    string TableName,
+public readonly record struct PipelineStepProgress(
+    string TaskLabel,
     int Processed,
     long EstimatedTotal,
     TimeSpan Elapsed
 );
 
-public readonly record struct TableCompleted(
-    string TableName,
+public readonly record struct PipelineStepCompleted(
+    string TaskLabel,
     int Imported,
     int Deleted,
     int Errors,
@@ -31,7 +29,7 @@ public readonly record struct TableCompleted(
     bool Cancelled
 );
 
-public readonly record struct ImportCompleted(
+public readonly record struct PipelineCompleted(
     int TotalImported,
     int TotalDeleted,
     int TotalErrors,
@@ -39,11 +37,26 @@ public readonly record struct ImportCompleted(
     bool Cancelled
 );
 
-public interface IImportReporter
+// Discriminated event wrapper to unify reporting through a single method
+public enum PipelineEventKind
 {
-    void OnPlan(ImportPlan plan);
-    void OnTablePlanned(TablePlan plan);
-    void OnProgress(TableProgress progress);
-    void OnTableCompleted(TableCompleted completed);
-    void OnCompleted(ImportCompleted completed);
+    Plan,
+    TaskPlanned,
+    Progress,
+    TaskCompleted,
+    Completed
+}
+
+public readonly record struct PipelineEvent(PipelineEventKind Kind, object Payload)
+{
+    public static PipelineEvent Plan(PipelineData plan) => new(PipelineEventKind.Plan, plan);
+    public static PipelineEvent TaskPlanned(PipelineStepData task) => new(PipelineEventKind.TaskPlanned, task);
+    public static PipelineEvent Progress(PipelineStepProgress progress) => new(PipelineEventKind.Progress, progress);
+    public static PipelineEvent TaskCompleted(PipelineStepCompleted completed) => new(PipelineEventKind.TaskCompleted, completed);
+    public static PipelineEvent Completed(PipelineCompleted completed) => new(PipelineEventKind.Completed, completed);
+}
+
+public interface IPipelineReporter
+{
+    void Report(PipelineEvent e);
 }

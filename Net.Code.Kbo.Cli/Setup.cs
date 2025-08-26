@@ -9,6 +9,9 @@ using Microsoft.Extensions.Logging.Console;
 using Net.Code.ADONet;
 using Net.Code.Kbo.Data;
 
+using System.Data.SQLite;
+using System.Runtime;
+
 namespace Net.Code.Kbo;
 
 static class Setup
@@ -32,6 +35,12 @@ static class Setup
         });
         services.AddTransient<Reporting>();
         services.AddImportService(connectionString);
+        services.AddTransient<IPipelineReporter, SpectreTaskProgressReporter>();
+        services.AddScoped<IDb, Db>(
+        serviceProvider => new Db(
+            connectionString, SQLiteFactory.Instance)
+        );
+
         return services.BuildServiceProvider();
     }
 }

@@ -1,24 +1,31 @@
-﻿namespace Net.Code.Kbo;
+﻿using Net.Code.ADONet;
+
+namespace Net.Code.Kbo;
 
 static class Extensions
 {
-    extension(TimeSpan span)
+    class TableInfo
     {
-        public string ToShortString() => span switch
+        public string name { get; set; } = null!;
+    }
+
+    extension(IDb db)
+    {
+
+        // the database contains no tables, or all tables are empty
+        public bool IsEmpty
         {
-            { TotalDays: > 1 } => $"{(int)span.TotalDays}d {span.Hours}h {span.Minutes}m",
-            { TotalDays: 1 } => $"1d",
-            { TotalHours: > 1 } => $"{span.Hours}h {span.Minutes}m {span.Seconds}s",
-            { TotalHours: 1 } => $"1h",
-            { TotalMinutes: > 1 } => $"{span.Minutes}m {span.Seconds}s",
-            { TotalMinutes: 1 } => $"1m",
-            { TotalSeconds: > 1 } => $"{span.Seconds}s {span.Milliseconds} ms",
-            { TotalSeconds: 1 } => $"1s",
-            { TotalMilliseconds: > 1 } => $"{span.TotalMilliseconds:0.00} ms",
-            { TotalMilliseconds: 1 } => $"1 ms",
-            { TotalMicroseconds: > 1 } => $"{span.TotalMicroseconds:0.00} µs",
-            { TotalMicroseconds: 1 } => $"1 µs",
-            _ => $"{span.TotalNanoseconds} ns"
-        };
+            get 
+            {
+                const string sql = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';";
+                var tables = db.Sql(sql).AsEnumerable<TableInfo>().ToList();
+                foreach (var table in tables)
+                {
+                    var count = db.Sql($"SELECT COUNT(1) FROM {table.name};").AsScalar<int>();
+                    if (count > 0) return false; // found a table with rows
+                }
+                return true; 
+            }
+        }
     }
 }

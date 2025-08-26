@@ -17,3 +17,7 @@ GET {{Net.Code.Kbo.Api_HostAddress}}/companies?name=kbc&language=NL
 ###
 
 GET {{Net.Code.Kbo.Api_HostAddress}}/companies?name=mensura&language=NL
+
+###
+
+GET {{Net.Code.Kbo.Api_HostAddress}}/companies/0459.526.909

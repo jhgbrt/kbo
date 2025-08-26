@@ -3,6 +3,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Console;
 
 using Net.Code.ADONet;
 using Net.Code.Kbo.Data;
@@ -27,6 +29,21 @@ static class HostBuilder
             if (connectionString is null) throw new InvalidOperationException("Connection string not found");
             services.AddDbContext<KboDataContext>(options => options.UseSqlite(connectionString), contextLifetime: ServiceLifetime.Singleton);
             services.AddTransient<IDb>(s => new Db(connectionString, SqliteFactory.Instance));
+            services.AddLogging(l =>
+            {
+                l.ClearProviders();
+                l.AddSimpleConsole(options =>
+                {
+                    options.SingleLine = true;
+                    options.TimestampFormat = "hh:mm:ss ";
+                    options.UseUtcTimestamp = true;
+                    options.ColorBehavior = LoggerColorBehavior.Enabled;
+                });
+                l.SetMinimumLevel(LogLevel.Warning); // warning+
+                services.AddTransient<Reporting>();
+                services.AddImportService(connectionString);
+                services.AddTransient<IPipelineReporter, SpectreTaskProgressReporter>();
+            });
         });
 
 }
