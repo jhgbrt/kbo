@@ -104,12 +104,13 @@ public class SpectreTaskProgressReporter : IPipelineReporter
                 .Start(ctx =>
                 {
                     // Overall first to keep it pinned at the bottom consistently
-                    run!.OverallTask = ctx.AddTask($"Overall Progress: ", maxValue: totalEstimated > 0 ? totalEstimated : 1);
+                    var totalText = totalEstimated > 0 ? $"/{FormatEvents(totalEstimated)}" : string.Empty;
+                    run!.OverallTask = ctx.AddTask($"Overall Progress: Processed 0{totalText} events", maxValue: totalEstimated > 0 ? totalEstimated : 1);
 
                     // Create all per-task tasks now so the UI doesn't jump; populate model
                     foreach (var t in plan.Tasks)
                     {
-                        var task = ctx.AddTask($"Pending {t.TaskLabel}", maxValue: t.EstimatedTotal > 0 ? t.EstimatedTotal : 1);
+                        var task = ctx.AddTask($"Pending {t.TaskLabel} (0/{FormatEvents(t.EstimatedTotal)} events)", maxValue: t.EstimatedTotal > 0 ? t.EstimatedTotal : 1);
                         var state = new TaskState
                         {
                             Name = t.TaskLabel,
@@ -169,7 +170,8 @@ public class SpectreTaskProgressReporter : IPipelineReporter
             if (run.OverallTask is not null)
             {
                 run.OverallTask.Increment(delta);
-                run.OverallTask.Description = $"Overall Progress: ";
+                var totalText = run.TotalEstimated > 0 ? $"/{FormatEvents(run.TotalEstimated)}" : string.Empty;
+                run.OverallTask.Description = $"Overall Progress: Processed {run.TotalProcessed:N0}{totalText} events";
             }
         });
     }
@@ -201,7 +203,8 @@ public class SpectreTaskProgressReporter : IPipelineReporter
             if (run!.OverallTask is not null)
             {
                 run.OverallTask.Value = run.OverallTask.MaxValue;
-                run.OverallTask.Description = $"Overall Progress: ";
+                var totalText = run.TotalEstimated > 0 ? $"/{FormatEvents(run.TotalEstimated)}" : string.Empty;
+                run.OverallTask.Description = $"Overall Progress: Processed {done.TotalImported:N0}{totalText} events";
             }
 
             foreach (var state in run.Tasks.Values)
@@ -242,10 +245,10 @@ public class SpectreTaskProgressReporter : IPipelineReporter
     private static string BuildDescription(TaskState s)
         => s.Status switch
         {
-            TaskStatus.Pending => $"Pending {s.Name}...",
-            TaskStatus.Busy => $"Processing {s.Name}...",
-            TaskStatus.Completed => $"Completed {s.Name} ({s.Imported:N0})",
-            TaskStatus.Cancelled => $"Cancelled {s.Name}",
+            TaskStatus.Pending => $"Pending {s.Name} (0/{FormatEvents(s.Estimated)} events)",
+            TaskStatus.Busy => $"Processing {s.Name}... ({s.Processed:N0}/{FormatEvents(s.Estimated)} events)",
+            TaskStatus.Completed => $"Completed {s.Name} ({s.Imported:N0} events)",
+            TaskStatus.Cancelled => $"Cancelled {s.Name} (0/{FormatEvents(s.Estimated)} events)",
             _ => s.Name
         };
 

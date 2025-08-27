@@ -1,18 +1,16 @@
-﻿using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging;
+﻿using Microsoft.Extensions.Logging;
 
 using Net.Code.ADONet;
 using Net.Code.Csv;
 using Net.Code.Kbo.Data;
 
-using System.Data.SQLite;
 using System.Diagnostics;
 
 
 namespace Net.Code.Kbo;
-public readonly record struct ImportResult(int Inserted, int Updated, int Deleted, int Errors)
+readonly record struct ImportResult(int Inserted, int Updated, int Deleted, int Errors)
 {
-    public static ImportResult operator+(ImportResult a, ImportResult b) => new ImportResult(a.Inserted + b.Inserted, a.Updated + b.Updated, a.Deleted + b.Deleted, a.Errors + b.Errors);
+    public static ImportResult operator+(ImportResult a, ImportResult b) => new (a.Inserted + b.Inserted, a.Updated + b.Updated, a.Deleted + b.Deleted, a.Errors + b.Errors);
 }
 
 public interface IImportService
@@ -22,232 +20,14 @@ public interface IImportService
     int RebuildCache(bool documents, bool fts, CancellationToken ct);
 }
 
-class Pipeline(List<PipelineStep> steps, IPipelineReporter? reporter)
-{
-    public int TotalSteps => steps.Count;
-    public TimeSpan Elapsed => Stopwatch.Elapsed;
-    public IReadOnlyList<PipelineStep> Steps { get; } = steps;
-    private Stopwatch Stopwatch { get; } = new Stopwatch();
-    private List<ImportResult> results = new();
 
-    // Progress state (per-step)
-    private PipelineStep? currentStep;
-    private long processedInStep;
-    private DateTime lastProgressAtUtc;
-    private static readonly TimeSpan ProgressThrottle = TimeSpan.FromMilliseconds(250);
-
-    public ImportResult Execute(IDb db, CancellationToken ct, int baseEstimate)
-    {
-
-        db.Connect();
-        db.Sql("PRAGMA journal_mode=WAL;").AsNonQuery();
-        db.Sql("PRAGMA synchronous=NORMAL;").AsNonQuery();
-        db.Sql("PRAGMA temp_store=MEMORY;").AsNonQuery();
-        db.Sql("PRAGMA cache_size=-200000;").AsNonQuery();
-
-        results.Clear();
-        var status = PipelineStepStatus.Pending;
-        Stopwatch.Start();
-        try
-        {
-            var connection = db.Connection as SQLiteConnection;
-            if (connection is not null)
-            {
-                connection.Update += OnUpdate;
-            }
-
-           
-            // Prepare and compute estimates
-            foreach (var step in Steps)
-            {
-                step.Prepare(db, ct, baseEstimate);
-            }
-
-            // Emit plan (folder/limit/incremental unknown here -> defaults)
-            var tasks = Steps.Select(s => new PipelineStepData(s.Name, s.Estimate ?? baseEstimate)).ToList();
-            var totalEstimated = tasks.Aggregate(0L, (sum, t) => sum + Math.Max(0, t.EstimatedTotal));
-            reporter?.Report(PipelineEvent.Plan(new PipelineData(
-                Folder: string.Empty,
-                Incremental: false,
-                Limit: null,
-                Tasks: tasks,
-                TotalEstimatedRows: totalEstimated
-            )));
-
-            status = PipelineStepStatus.InProgress;
-
-            foreach (var step in Steps)
-            {
-                if (status != PipelineStepStatus.InProgress)
-                {
-                    step.Status = status;
-                    continue;
-                }
-
-                // Notify step planned/starting
-                reporter?.Report(PipelineEvent.TaskPlanned(new PipelineStepData(step.Name, step.Estimate ?? baseEstimate)));
-
-                // Reset per-step counters and progress state
-                result = new();
-                currentStep = step;
-                processedInStep = 0;
-                lastProgressAtUtc = DateTime.UtcNow;
-
-                int stepErrors = 0;
-                try
-                {
-                    stepErrors = step.Execute(db, ct);
-                    step.Status = PipelineStepStatus.Completed;
-                }
-                catch (OperationCanceledException)
-                {
-                    status = PipelineStepStatus.Cancelled;
-                    step.Status = PipelineStepStatus.Cancelled;
-                }
-                catch
-                {
-                    status = PipelineStepStatus.Failed;
-                    step.Status = PipelineStepStatus.Failed;
-                    throw;
-                }
-
-                // Record per-step results and notify completion
-                var imported = result.Inserted + result.Updated;
-                var deleted = result.Deleted;
-                var errors = Math.Max(0, stepErrors);
-                var duration = step.Elapsed;
-                var cancelled = step.Status == PipelineStepStatus.Cancelled;
-
-                results.Add(new ImportResult(result.Inserted, result.Updated, result.Deleted, errors));
-
-                reporter?.Report(PipelineEvent.TaskCompleted(new PipelineStepCompleted(
-                    TaskLabel: step.Name,
-                    Imported: imported,
-                    Deleted: deleted,
-                    Errors: errors,
-                    Duration: duration,
-                    Cancelled: cancelled
-                )));
-
-                // Clear current step after completion
-                currentStep = null;
-
-                // If cancelled or failed, stop processing remaining steps
-                if (status != PipelineStepStatus.InProgress)
-                {
-                    break;
-                }
-            }
-        }
-        finally
-        {
-            if (db.Connection is SQLiteConnection connection)
-            {
-                connection.Update -= OnUpdate;
-            }
-            Stopwatch.Stop();
-
-            // Emit final completion
-            var totalInserted = results.Sum(r => r.Inserted + r.Updated);
-            var totalDeleted = results.Sum(r => r.Deleted);
-            var totalErrors = results.Sum(r => r.Errors);
-            var cancelled = status == PipelineStepStatus.Cancelled;
-
-            reporter?.Report(PipelineEvent.Completed(new PipelineCompleted(
-                TotalImported: totalInserted,
-                TotalDeleted: totalDeleted,
-                TotalErrors: totalErrors,
-                Duration: Elapsed,
-                Cancelled: cancelled
-            )));
-        }
-
-        return results.Aggregate(new ImportResult(0, 0, 0, 0), (a, b) => a + b);
-    }
-
-    ImportResult result;
-
-    private void OnUpdate(object sender, UpdateEventArgs e)
-    {
-        // Aggregate per-step counters
-        result = e.Event switch
-        {
-            UpdateEventType.Insert => result + new ImportResult(1, 0, 0, 0),
-            UpdateEventType.Update => result + new ImportResult(0, 1, 0, 0),
-            UpdateEventType.Delete => result + new ImportResult(0, 0, 1, 0),
-            _ => result + new ImportResult(0, 0, 0, 1)
-        };
-
-        // Intermediate progress emission (throttled)
-        if (currentStep is not null && reporter is not null && e.Event == UpdateEventType.Insert)
-        {
-            processedInStep++;
-            var now = DateTime.UtcNow;
-            if (now - lastProgressAtUtc >= ProgressThrottle)
-            {
-                lastProgressAtUtc = now;
-                var estimate = currentStep.Estimate ?? 0;
-                reporter.Report(PipelineEvent.Progress(new PipelineStepProgress(
-                    TaskLabel: currentStep.Name,
-                    Processed: (int)Math.Min(int.MaxValue, processedInStep),
-                    EstimatedTotal: estimate,
-                    Elapsed: currentStep.Elapsed
-                )));
-            }
-        }
-    }
-}
-
-enum PipelineStepStatus
-{
-    Pending,
-    InProgress,
-    Completed,
-    Failed,
-    Cancelled
-}
-
-abstract class PipelineStep(string name)
-{
-    public string Name { get; } = name;
-    public int? Estimate { get; protected set; }
-    public TimeSpan Elapsed => Stopwatch.Elapsed;
-    private Stopwatch Stopwatch { get; } = new Stopwatch();
-
-    public void Prepare(IDb db, CancellationToken ct, int baseEstimate)
-    {
-        Estimate = GetEstimate(db, ct);
-        Status = PipelineStepStatus.Pending;
-    }
-
-    public int Execute(IDb db, CancellationToken ct)
-    {
-        try
-        {
-            Status = PipelineStepStatus.InProgress;
-            Estimate = GetEstimate(db, ct);
-            Stopwatch.Start();
-            var result = ExecuteImpl(db, ct);
-            Status = PipelineStepStatus.Completed;
-            return result;
-        }
-        finally
-        {
-            Stopwatch.Stop();
-        }
-    }
-
-    protected abstract int ExecuteImpl(IDb db, CancellationToken ct);
-    public virtual int? GetEstimate(IDb db, CancellationToken ct) => null;
-    public PipelineStepStatus Status { get; set; } = PipelineStepStatus.Pending;
-}
 
 abstract class CsvImportStep<TImport, TData>(string name, string path, ImportHelper helper, string keyName, Func<TImport, CodeCache, MapResult<TImport, TData>> MapToTable, bool incremental) 
     : PipelineStep(name)
     where TData : class
 {
     protected override int ExecuteImpl(IDb db, CancellationToken ct) => helper.Import(path, incremental, keyName, MapToTable, ct);
-    public override int? GetEstimate(IDb db, CancellationToken ct) => helper.EstimateTotalDataLines(path, incremental);
+    public override int? GetEstimate(IDb db, CancellationToken ct, int nofEnterprises) => helper.EstimateTotalDataLines(path, incremental);
 }
 
 class ImportMeta(string path, ImportHelper helper) 
@@ -255,35 +35,114 @@ class ImportMeta(string path, ImportHelper helper)
 {
 }
 
-class ImportCodes(string path, DataContextFactory factory, ImportHelper helper) : PipelineStep("Import Codes")
+
+class ImportCodes(string path, ImportHelper helper) : PipelineStep("Import Codes")
 {
     protected override int ExecuteImpl(IDb db, CancellationToken ct)
     {
-        helper.DropAndRecreate("CodeDescription");
-        helper.DropAndRecreate("Codes");
+        db.Sql("BEGIN IMMEDIATE TRANSACTION;").AsNonQuery();
 
-        using var context = factory.DataContext();
-        context.Codes.ExecuteDelete();
-        var items = helper.Read<Data.Import.Code>(path);
-        var grouped = from item in items
-                      group item by (item.Category, item.CodeValue) into descriptions
-                      select new Data.Code
-                      {
-                          CodeValue = descriptions.Key.CodeValue,
-                          Category = descriptions.Key.Category,
-                          Descriptions = descriptions.Select(d => new CodeDescription
-                          {
-                              Language = d.Language,
-                              Description = d.Description
-                          }).ToList()
-                      };
-        context.Codes.AddRange(grouped);
-        context.SaveChanges();
+        db.Sql("""
+        CREATE TEMP TABLE Codes_stage(Category TEXT NOT NULL, Code TEXT NOT NULL);
+        CREATE TEMP TABLE CodeDescription_stage(Category TEXT NOT NULL, Code TEXT NOT NULL, Language TEXT NOT NULL, Description TEXT NOT NULL);
+        CREATE UNIQUE INDEX IF NOT EXISTS UX_Codes_Category_Code ON Codes(Category, Code);
+        CREATE UNIQUE INDEX IF NOT EXISTS UX_CodeDescription_CodeId_Language ON CodeDescription(CodeId, Language);
+        """).AsNonQuery();
+
+        var items = helper.Read<Data.Import.Code>(path).ToList();
+
+        var codes = from item in items
+                    group item by (item.Category, item.CodeValue) into grp
+                    select new { grp.Key.Category, Code = grp.Key.CodeValue };
+
+        var insertCodes = """
+            INSERT INTO Codes_stage(Category, Code) VALUES(@Category, @Code);
+            """;
+        var cb1 = db.Sql(insertCodes);
+        foreach (var code in codes)
+        {
+            cb1.WithParameters(code).AsNonQuery();
+        }
+
+        var descriptions = from item in items
+                           select new { item.Category, Code = item.CodeValue, item.Language, item.Description };
+
+        var insertCodeDescriptions = """
+            INSERT INTO CodeDescription_stage(Category, Code, Language, Description) VALUES(@Category, @Code, @Language, @Description);
+            """;
+        var cb2 = db.Sql(insertCodeDescriptions);
+        foreach (var desc in descriptions)
+        {
+            cb2.WithParameters(desc).AsNonQuery();
+        }
+
+        db.Sql("""
+        INSERT OR IGNORE INTO Codes(Category, Code)
+        SELECT DISTINCT Category, Code FROM Codes_stage
+        """).AsNonQuery();
+
+        db.Sql("""
+        INSERT OR IGNORE INTO CodeDescription(CodeId, Language, Description)
+        SELECT c.Id, cds.Language, cds.Description
+        FROM CodeDescription_stage cds
+        JOIN Codes c ON c.Category = cds.Category AND c.Code = cds.Code
+        """).AsNonQuery();
+
+        db.Sql("""
+        UPDATE CodeDescription
+        SET Description = (
+          SELECT s.Description
+          FROM CodeDescription_stage s
+          JOIN Codes c ON c.Category = s.Category AND c.Code = s.Code
+          WHERE c.Id = CodeDescription.CodeId
+            AND s.Language = CodeDescription.Language
+        )
+        WHERE EXISTS (
+          SELECT 1
+          FROM CodeDescription_stage s
+          JOIN Codes c ON c.Category = s.Category AND c.Code = s.Code
+          WHERE c.Id = CodeDescription.CodeId
+            AND s.Language = CodeDescription.Language
+            AND s.Description <> CodeDescription.Description
+        );
+        """);
+
+        db.Sql("""
+        DELETE FROM CodeDescription
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM codes_stage s
+          JOIN Codes c ON c.Category = s.Category AND c.Code = s.Code
+          WHERE c.Id = CodeDescription.CodeId
+        );
+        """).AsNonQuery();
+
+        db.Sql("""
+        DELETE FROM Codes
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM codes_stage s
+          WHERE s.Category = Codes.Category AND s.Code = Codes.Code
+        );
+
+        """).AsNonQuery();
+
+        db.Sql("""
+        DROP TABLE IF EXISTS Codes_stage;
+        DROP TABLE IF EXISTS CodeDescription_stage;
+        """).AsNonQuery();
+
+        db.Sql("COMMIT;").AsNonQuery();
         return 0;
     }
-    public override int? GetEstimate(IDb db, CancellationToken ct)
+    public override int? GetEstimate(IDb db, CancellationToken ct, int nofEnterprises)
     {
-        return helper.EstimateTotalDataLines(path);
+        var lines = helper.EstimateTotalDataLines(path);
+        if (lines.HasValue)
+        {
+            return lines.Value + lines.Value / 2; // approximately 2 descriptions per code
+        }
+        return null;
     }
 }
 
@@ -434,15 +293,9 @@ class RebuildCompanyDocuments() : PipelineStep("Rebuild CompanyDocuments")
 
         return 0;
     }
-    bool TableExists(IDb db)
+    public override int? GetEstimate(IDb db, CancellationToken ct, int nofEnterprises)
     {
-        var count = db.Sql("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='CompanyDocuments';")
-                      .AsScalar<int>();
-        return count > 0;
-    }
-    public override int? GetEstimate(IDb db, CancellationToken ct)
-    {
-        return TableExists(db) ? db.Sql("SELECT COUNT(*) FROM Enterprises").AsScalar<int>() : null;
+        return nofEnterprises;
     }
 }
 
@@ -450,9 +303,6 @@ class RebuildFtsIndex() : PipelineStep("Rebuild FTS Index")
 {
     protected override int ExecuteImpl(IDb db, CancellationToken ct)
     {
-        // Get total documents count for progress estimation
-        var totalDocuments = GetEstimate(db, ct);
-        var expectedUpdateEvents = totalDocuments * 4; // Based on our diagnostic findings
 
         var dropFts = "DROP TABLE IF EXISTS companies_locations_fts;";
         var createFts = """
@@ -503,15 +353,9 @@ class RebuildFtsIndex() : PipelineStep("Rebuild FTS Index")
 
         return 0;
     }
-    private bool TableExists(IDb db)
+    public override int? GetEstimate(IDb db, CancellationToken ct, int nofEnterprises)
     {
-        var count = db.Sql("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='companies_locations_fts';")
-                      .AsScalar<int>();
-        return count > 0;
-    }
-    public override int? GetEstimate(IDb db, CancellationToken ct)
-    {
-        return TableExists(db) ? db.Sql("SELECT COUNT(*) FROM Enterprises").AsScalar<int>() * 4: null;
+        return nofEnterprises * 4;
     }
 }
 
@@ -519,8 +363,6 @@ class RebuildCompanyLocationsDoc() : PipelineStep("Rebuild CompanyLocationsDoc")
 {
     protected override int ExecuteImpl(IDb db, CancellationToken ct)
     {
-        var totalDocuments = GetEstimate(db, ct);
-        var expectedUpdateEvents = totalDocuments;
         var dropMap = "DROP TABLE IF EXISTS companies_locations_doc;";
         var createMap = "CREATE TABLE companies_locations_doc(rowid INTEGER PRIMARY KEY, enterprise_number TEXT NOT NULL UNIQUE);";
         var insertMap = """
@@ -537,43 +379,32 @@ class RebuildCompanyLocationsDoc() : PipelineStep("Rebuild CompanyLocationsDoc")
         return 0;
     }
 
-    private bool TableExists(IDb db)
+    public override int? GetEstimate(IDb db, CancellationToken ct, int nofEnterprises)
     {
-        var count = db.Sql("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='companies_locations_doc';")
-                      .AsScalar<int>();
-        return count > 0;
-    }
-
-    public override int? GetEstimate(IDb db, CancellationToken ct)
-    {
-        return TableExists(db) ? db.Sql("SELECT COUNT(*) FROM Enterprises").AsScalar<int>(): null;
+        return nofEnterprises;
     }
 }
 
 internal class ImportService : IImportService
 {
-    public ImportService(DataContextFactory factory, IDb db, ILogger<ImportService> logger, ImportHelper helper, IPipelineReporter? reporter = null)
+    public ImportService(IDb db, ILogger<ImportService> logger, ImportHelper helper, IPipelineReporter? reporter = null)
     {
-        this.factory = factory;
         this.db = db;
         this.logger = logger;
         this.reporter = reporter;
         this.helper = helper;
     }
 
-    private readonly DataContextFactory factory;
     private readonly IDb db;
     private readonly ILogger<ImportService> logger;
     private readonly ImportHelper helper;
     private readonly IPipelineReporter? reporter;
 
-
-
     public int FullImport(string folder, bool incremental, CancellationToken ct = default)
     {
-        if (!db.IsEmpty && !incremental)
+        if (!db.IsEmpty && !incremental && !Debugger.IsAttached)
         {
-            throw new Exception("Database is not empty. Full import can only be performed on an empty database.");
+           throw new Exception("Database is not empty. Full import can only be performed on an empty database.");
         }
 
         var enterprises = new ImportEnterprises(Path.Combine(folder, "enterprise.csv"), helper, incremental);
@@ -581,7 +412,7 @@ internal class ImportService : IImportService
         var pipeline = new Pipeline(
         [
             new ImportMeta(Path.Combine(folder, "meta.csv"), helper),
-            new ImportCodes(Path.Combine(folder, "code.csv"), factory, helper),
+            new ImportCodes(Path.Combine(folder, "code.csv"), helper),
             enterprises,
             new ImportEstablishments(Path.Combine(folder, "establishment.csv"), helper, incremental),
             new ImportBranches(Path.Combine(folder, "branch.csv"), helper, incremental),
@@ -594,16 +425,12 @@ internal class ImportService : IImportService
             new RebuildFtsIndex()
         ], reporter);
 
-
-
-        var result = pipeline.Execute(db, ct, enterprises.GetEstimate(db, ct) ?? (incremental ? 100000 : 2000000));
-
+        var result = pipeline.Execute(db, ct, enterprises.GetEstimate(db, ct, 2000000) ?? (incremental ? 100000 : 2000000));
 
         return 0;
     }
     public int ImportFiles(string folder, IEnumerable<string> files, bool incremental, CancellationToken ct = default)
     {
-    
         var enterprises = files.Contains("enterprise") ? 
             new ImportEnterprises(Path.Combine(folder, "enterprise.csv"), helper, incremental) : 
             null;
@@ -613,7 +440,7 @@ internal class ImportService : IImportService
             let step = f switch 
             {
                 "meta" => (PipelineStep)new ImportMeta(Path.Combine(folder, f), helper),
-                "code" => new ImportCodes(Path.Combine(folder, f), factory, helper),
+                "code" => new ImportCodes(Path.Combine(folder, f), helper),
                 "enterprise" => enterprises,
                 "establishment" => new ImportEstablishments(Path.Combine(folder, f), helper, incremental),
                 "branch" => new ImportBranches(Path.Combine(folder, f), helper, incremental),
@@ -627,7 +454,7 @@ internal class ImportService : IImportService
             select step).ToList(), reporter
         );
 
-        pipeline.Execute(db, ct, enterprises?.GetEstimate(db, ct) ?? 2000000);
+        pipeline.Execute(db, ct, enterprises?.GetEstimate(db, ct, 2000000) ?? 2000000);
 
         return 0;
     }
@@ -657,8 +484,6 @@ internal class ImportService : IImportService
                       .AsScalar<int>();
         return count > 0;
     }
-
-
 }
 
 
@@ -684,7 +509,9 @@ internal class ImportHelper
         ) where TTable : class
     {
         if (!incremental)
+        {
             return ImportFull(path, MapToTable, ct);
+        }
         else
         {
             var fileInfo = new FileInfo(path);
@@ -699,15 +526,7 @@ internal class ImportHelper
         }
     }
 
-    public void DropAndRecreate(string tableName)
-    {
-        var create = db.Sql($"SELECT sql FROM sqlite_master WHERE type = 'table' AND name = '{tableName}';").AsScalar<string>();
-        if (string.IsNullOrEmpty(create))
-            throw new InvalidOperationException($"Table {tableName} not found in database");
-        db.Sql($"DROP TABLE IF EXISTS {tableName}").AsNonQuery();
-        db.Sql(create).AsNonQuery();
-    }
-
+    
     int ImportFull<TImport, TTable>(
             string path,
             Func<TImport,CodeCache, MapResult<TImport, TTable>> MapToTable,
@@ -723,7 +542,7 @@ internal class ImportHelper
             return -1;
         }
 
-        DropAndRecreate(tableName);
+        db.DropAndRecreate(tableName);
 
         db.Sql("BEGIN IMMEDIATE TRANSACTION;").AsNonQuery();
 
@@ -797,12 +616,14 @@ internal class ImportHelper
             return result;
         }
 
+        var mappeditems = from item in items
+                          let _ = ct.IsCancellationRequested ? throw new OperationCanceledException() : true
+                          let mapped = HandleError(MapToTable(item, codeCache))
+                          where mapped.Success && mapped.Target is not null
+                          select mapped.Target;
+
         db.Insert(
-            from item in items
-            let _ = ct.IsCancellationRequested ? throw new OperationCanceledException() : true
-            let mapped = HandleError(MapToTable(item, codeCache))
-            where mapped.Success && mapped.Target is not null
-            select mapped.Target
+            mappeditems
         );
 
         db.Sql("COMMIT;").AsNonQuery();
@@ -828,10 +649,10 @@ internal class ImportHelper
         int newlineBytes = encoding.GetByteCount(Environment.NewLine);
         long headerBytes = encoding.GetByteCount(header) + newlineBytes;
 
-        // Sample first 100 data lines
+        // Sample first 1000 data lines
         long sampleBytes = 0;
         int sampleCount = 0;
-        while (sampleCount < 100)
+        while (sampleCount < 1000)
         {
             var line = reader.ReadLine();
             if (line is null) return sampleCount; // eof

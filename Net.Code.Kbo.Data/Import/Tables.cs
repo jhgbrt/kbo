@@ -261,4 +261,43 @@ static class Tables
             return new(true, item, meta, []);
         }
     }
+
+    public class  Codes
+    {
+        [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
+        public int Id { get; set; }
+        public required string Category { get; set; } = string.Empty;
+        public required string Code { get; set; } = string.Empty;
+        public static MapResult<(string category, string code), Codes> MapFrom((string category, string code) item)
+        {
+            var code = new Codes { Category = item.category, Code = item.code };
+            return new(true, item, code, []);
+        }
+
+    }
+
+    public class CodeDescription
+    {
+        public int CodeId { get; set; }
+        public string Language { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public static MapResult<Data.Import.Code, CodeDescription> MapFrom(Data.Import.Code item, IReadOnlyDictionary<(string category, string code), int> codes)
+        {
+            List<string> errors = [];
+            if (!codes.TryGetValue((item.Category, item.CodeValue), out var codeId))
+            {
+                errors.Add($"Code '{item.Category}/{item.CodeValue}' not found");
+            }
+            var success = !errors.Any();
+            var contact = success ? new CodeDescription
+            {
+                CodeId = codeId,
+                Description = item.Description,
+                Language = item.Language
+            } : null;
+            return new(success, item, contact, errors);
+        }
+    }
+
+   
 }
