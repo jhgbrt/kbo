@@ -21,3 +21,11 @@ GET {{Net.Code.Kbo.Api_HostAddress}}/companies?name=mensura&language=NL
 ###
 
 GET {{Net.Code.Kbo.Api_HostAddress}}/companies/0459.526.909
+
+###
+
+GET {{Net.Code.Kbo.Api_HostAddress}}/companies/search?text=Betaling%20Bancontact%2029%2F03%2F25%20-%2010.41%20uur%20-%20ALBERT%20HEIJN%203132%20HASS%203511%20-%20HASSELT%20-%20BEL%20Kaartnummer%205229%2062XX%20XXXX%200390
+
+###
+
+GET {{Net.Code.Kbo.Api_HostAddress}}/companies/0725.954.928

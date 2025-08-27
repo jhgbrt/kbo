@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Data.Sqlite;
 
+using Net.Code.ADONet;
 using Net.Code.Kbo;
 using Net.Code.Kbo.Data;
 using Net.Code.Kbo.Data.Service;
@@ -14,7 +16,7 @@ builder.Services.AddOpenApi();
 var connectionString = builder.Configuration.GetConnectionString("Kbo");
 if (connectionString is null) throw new InvalidOperationException("Connection string not found");
 builder.Services.AddCompanyService(connectionString);
-
+builder.Services.AddTransient<IDb>(s => new Db(connectionString, SqliteFactory.Instance));
 var app = builder.Build();
 
 app.MapDefaultEndpoints();
@@ -63,6 +65,24 @@ app.MapGet(
             var result => TypedResults.Ok(result)
         }
     ).WithName("SearchCompany");
+
+app.MapGet(
+    "/companies/search",
+    async Task<Results<Ok<Company[]>, NoContent, BadRequest<string>>>(
+        ICompanyService service,
+        [FromQuery] string? text,
+        [FromQuery] string? language,
+        [FromQuery] int? skip,
+        [FromQuery] int? take
+    ) =>
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return TypedResults.BadRequest("Query parameter 'text' is required.");
+
+        var results = await service.SearchCompany(text, language, skip ?? 0, take ?? 25);
+        return results.Length == 0 ? TypedResults.NoContent() : TypedResults.Ok(results);
+    }
+).WithName("SearchCompanyFreeText");
 
 app.Run();
 

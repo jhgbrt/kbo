@@ -319,7 +319,7 @@ class RebuildFtsIndex() : PipelineStep("Rebuild FTS Index")
               activity_desc_de,
               activity_desc_en,
               content='',
-              tokenize = "unicode61 remove_diacritics 2 tokenchars '.-/'",
+              tokenize = "unicode61 remove_diacritics 2",
               prefix = '2 3 4'
             );
             """;

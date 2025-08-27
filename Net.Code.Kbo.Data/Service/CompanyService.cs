@@ -3,7 +3,10 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Query;
 
+using Net.Code.ADONet;
+
 using System.Linq.Expressions;
+using System.Text.RegularExpressions;
 
 namespace Net.Code.Kbo.Data.Service;
 
@@ -11,9 +14,10 @@ public interface ICompanyService
 {
     Task<Company?> GetCompany(KboNr enterpriseNumber, string? language);
     Task<Company[]> SearchCompany(EntityLookup lookup, string? language, int skip = 0, int take = 25);
+    Task<Company[]> SearchCompany(string freeText, string? language, int skip = 0, int take = 25);
 }
 
-class CompanyService(KboDataContext context) : ICompanyService
+class CompanyService(KboDataContext context, IDb db) : ICompanyService
 {
     public async Task<Company?> GetCompany(KboNr enterpriseNumber, string? language)
     {
@@ -266,6 +270,128 @@ class CompanyService(KboDataContext context) : ICompanyService
 
         return result.ToArray();
 
+    }
+
+    class E { public string EnterpriseNumber { get; set; } }
+    public async Task<Company[]> SearchCompany(string freeText, string? language, int skip = 0, int take = 25)
+    {
+        language = language ?? "EN";
+        take = Math.Min(take, 25);
+        skip = Math.Max(0, skip);
+
+        var match = BuildFtsMatchExpression(freeText);
+        if (string.IsNullOrWhiteSpace(match)) return Array.Empty<Company>();
+
+        var sql = """
+            SELECT cd.EnterpriseNumber AS EnterpriseNumber
+            FROM companies_locations_fts
+            JOIN CompanyDocuments cd ON cd.rowid = companies_locations_fts.rowid
+            WHERE companies_locations_fts MATCH @match
+            ORDER BY bm25(companies_locations_fts,
+                     5.0,  -- company_name
+                     3.0,  -- commercial_name
+                     1.0,  -- street_nl
+                     1.0,  -- street_fr
+                     4.0,  -- city_nl
+                     4.0,  -- city_fr
+                     2.5,  -- postal_code
+                     0.5,  -- activity_desc_nl
+                     0.5,  -- activity_desc_fr
+                     0.5,  -- activity_desc_de
+                     0.5   -- activity_desc_en
+                   )
+            LIMIT @take OFFSET @skip;
+            """;
+
+        var enterpriseNumberList = db.Sql(sql)
+            .WithParameter("match", match)
+            .WithParameter("take", take)
+            .WithParameter("skip", skip)
+            .AsEnumerable<E>()
+            .Select(e => e.EnterpriseNumber )
+            .ToList();
+
+        if (enterpriseNumberList.Count == 0) return Array.Empty<Company>();
+
+        // Preserve ranking order from FTS
+        var order = enterpriseNumberList
+            .Select((n, i) => new { n, i })
+            .ToDictionary(x => x.n, x => x.i);
+
+        var enterpriseNumbers = enterpriseNumberList.Select(KboNr.Parse).ToArray();
+
+        var enterprises = await context.Enterprises
+            .Include(e => e.Establishments)
+            .Include(e => e.Branches)
+            .Include(e => e.JuridicalForm).ThenInclude(e => e!.Descriptions)
+            .Include(e => e.JuridicalFormCAC).ThenInclude(e => e!.Descriptions)
+            .Include(e => e.JuridicalSituation).ThenInclude(e => e.Descriptions)
+            .Include(e => e.TypeOfEnterprise).ThenInclude(e => e.Descriptions)
+            .Where(e => enterpriseNumbers.Contains(e.EnterpriseNumber))
+            .ToListAsync();
+
+        var allEntityNumbers = (from e in enterprises
+                                let establishmentNumbers = e.Establishments.Select(x => x.EstablishmentNumber)
+                                let branchNumbers = e.Branches.Select(b => b.Id)
+                                from n in new[] { e.EnterpriseNumber.ToString("F") }.Concat(establishmentNumbers).Concat(branchNumbers)
+                                select n).Distinct().ToArray();
+
+        var addresses = await GetAddresses(language, allEntityNumbers);
+        var entityNames = await GetEntityNames(language, allEntityNumbers);
+        var contacts = await GetContacts(language, allEntityNumbers);
+        var activities = await GetActivities(language, allEntityNumbers);
+
+        var companies = (from item in enterprises
+                         let key = item.EnterpriseNumber.ToString("F")
+                         select new Company(
+                             key,
+                             item.GetJuridicalForm(language) ?? string.Empty,
+                             item.GetJuridicalSituation(language) ?? string.Empty,
+                             item.GetTypeOfEnterprise(language) ?? string.Empty,
+                             entityNames[key].ToArray(),
+                             contacts[key].ToArray(),
+                             addresses[key].FirstOrDefault() ?? Address.Empty, // enterprise should always have exactly one address
+                             GetEstablishments(item, addresses, entityNames, contacts).ToArray(),
+                             GetBranches(item, addresses, entityNames, contacts).ToArray(),
+                             activities[key].ToArray()
+                         ))
+                        .OrderBy(c => order[c.EnterpriseNumber])
+                        .ToArray();
+
+        return companies;
+    }
+
+    private static string BuildFtsMatchExpression(string input)
+    {
+        if (string.IsNullOrWhiteSpace(input)) return string.Empty;
+
+        // Letters-only tokens and 4-digit numeric tokens (postal codes)
+        var rx = new Regex(@"\p{L}+|\d{4}", RegexOptions.Compiled);
+        var matches = rx.Matches(input);
+
+        var seen = new HashSet<string>();
+        var tokens = new List<string>(12);
+
+        foreach (Match m in matches)
+        {
+            var t = m.Value;
+            var isDigits = t.All(char.IsDigit);
+            if (isDigits && t.Length != 4) continue; // keep only 4-digit numbers
+
+            var normalized = isDigits ? t : t.ToLowerInvariant();
+            if (normalized.Length < 2 && !isDigits) continue; // drop 1-char letter tokens
+
+            if (seen.Add(normalized))
+            {
+                tokens.Add(normalized);
+                if (tokens.Count == 12) break;
+            }
+        }
+
+        if (tokens.Count == 0) return string.Empty;
+
+        var parts = tokens.Select(t => t.All(char.IsDigit) ? t : $"{t}*");
+        return $"({string.Join(" OR ", parts)})";
     }
 }
 
