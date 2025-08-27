@@ -327,10 +327,12 @@ class RebuildFtsIndex() : PipelineStep("Rebuild FTS Index")
 
         var insertFts = """
             INSERT INTO companies_locations_fts (
+              rowid,
               company_name, commercial_name, street_nl, street_fr, city_nl, city_fr, postal_code,
               activity_desc_nl, activity_desc_fr, activity_desc_de, activity_desc_en
             )
             SELECT
+              rowid,
               json_extract(Payload,'$.fts.companyName'),
               json_extract(Payload,'$.fts.commercialName'),
               json_extract(Payload,'$.fts.street.nl'), json_extract(Payload,'$.fts.street.fr'),
@@ -356,32 +358,6 @@ class RebuildFtsIndex() : PipelineStep("Rebuild FTS Index")
     public override int? GetEstimate(IDb db, CancellationToken ct, int nofEnterprises)
     {
         return nofEnterprises * 4;
-    }
-}
-
-class RebuildCompanyLocationsDoc() : PipelineStep("Rebuild CompanyLocationsDoc")
-{
-    protected override int ExecuteImpl(IDb db, CancellationToken ct)
-    {
-        var dropMap = "DROP TABLE IF EXISTS companies_locations_doc;";
-        var createMap = "CREATE TABLE companies_locations_doc(rowid INTEGER PRIMARY KEY, enterprise_number TEXT NOT NULL UNIQUE);";
-        var insertMap = """
-            INSERT INTO companies_locations_doc(enterprise_number)
-            SELECT EnterpriseNumber 
-            FROM CompanyDocuments ORDER BY EnterpriseNumber;
-            """;
-        db.Sql("BEGIN IMMEDIATE TRANSACTION;").AsNonQuery();
-        db.Sql(dropMap).AsNonQuery();
-        db.Sql(createMap).AsNonQuery();
-        ct.ThrowIfCancellationRequested();
-        db.Sql(insertMap).AsNonQuery();
-        db.Sql("COMMIT;").AsNonQuery();
-        return 0;
-    }
-
-    public override int? GetEstimate(IDb db, CancellationToken ct, int nofEnterprises)
-    {
-        return nofEnterprises;
     }
 }
 
@@ -421,7 +397,6 @@ internal class ImportService : IImportService
             new ImportContacts(Path.Combine(folder, "contact.csv"), helper, incremental),
             new ImportActivities(Path.Combine(folder, "activity.csv"), helper, incremental),
             new RebuildCompanyDocuments(),
-            new RebuildCompanyLocationsDoc(),
             new RebuildFtsIndex()
         ], reporter);
 
@@ -471,7 +446,6 @@ internal class ImportService : IImportService
         if (fts)
         {
             steps.Add(new RebuildFtsIndex());
-            steps.Add(new RebuildCompanyLocationsDoc());
         }
 
         var pipeline = new Pipeline(steps, reporter);

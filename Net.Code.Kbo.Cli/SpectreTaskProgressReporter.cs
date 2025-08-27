@@ -1,4 +1,4 @@
-using Spectre.Console;
+﻿using Spectre.Console;
 using Spectre.Console.Rendering;
 using System.Collections.Concurrent;
 using System.Diagnostics;
@@ -85,6 +85,20 @@ public class SpectreTaskProgressReporter : IPipelineReporter
             planTable.AddRow("Estimated time", $"{FormatDuration(eta)} (@{DefaultEventsPerSecond:0} ev/s)");
         }
         AnsiConsole.Write(planTable);
+
+        // Per-task weights table
+        var denom = plan.Tasks.Where(t => t.EstimatedTotal > 0).Sum(t => t.EstimatedTotal);
+        var weightsTable = new Table().Border(TableBorder.Rounded).Title("[bold]Task Weights[/]");
+        weightsTable.AddColumns("Task", "Estimated", "Weight");
+        foreach (var t in plan.Tasks)
+        {
+            var estText = FormatEvents(t.EstimatedTotal);
+            var weightText = (t.EstimatedTotal > 0 && denom > 0)
+                ? $"{(double)t.EstimatedTotal / denom:P0}"
+                : "?";
+            weightsTable.AddRow(t.TaskLabel, estText, weightText);
+        }
+        AnsiConsole.Write(weightsTable);
         AnsiConsole.WriteLine();
 
         // Start progress UI loop with all tasks created up front for stability
@@ -228,16 +242,41 @@ public class SpectreTaskProgressReporter : IPipelineReporter
 
         // Final summary table (uses collected completions)
         var table = new Table().Border(TableBorder.Rounded).Title("[bold]Summary[/]");
-        table.AddColumns("Task", "Deleted", "Processed", "Errors", "Duration", "Events/s", "Cancelled");
+        table.AddColumns("Task", "Est.", "Imported", "Δ", "Δ%", "Deleted", "Errors", "Duration", "Events/s", "Cancelled");
         foreach (var t in completed)
         {
+            var est = run.Tasks.TryGetValue(t.TaskLabel, out var s) ? s.Estimated : 0;
+            var delta = (long)t.Imported - est;
+            var deltaPct = est > 0 ? $"{(double)delta / est:P0}" : "-";
             var rps = t.Duration.TotalSeconds > 0 ? (t.Imported / t.Duration.TotalSeconds).ToString("0") : "-";
-            table.AddRow(t.TaskLabel, t.Deleted.ToString("N0"), t.Imported.ToString("N0"), t.Errors.ToString("N0"), FormatDuration(t.Duration), rps, t.Cancelled ? "yes" : "no");
+            table.AddRow(
+                t.TaskLabel,
+                FormatEvents(est),
+                t.Imported.ToString("N0"),
+                delta.ToString("+#,0;-#,0;0"),
+                deltaPct,
+                t.Deleted.ToString("N0"),
+                t.Errors.ToString("N0"),
+                FormatDuration(t.Duration),
+                rps,
+                t.Cancelled ? "yes" : "no");
         }
 
         var overallRps = run.Overall.Elapsed.TotalSeconds > 0 ? (done.TotalImported / run.Overall.Elapsed.TotalSeconds).ToString("0") : "-";
+        var overallDelta = (long)done.TotalImported - run.TotalEstimated;
+        var overallDeltaPct = run.TotalEstimated > 0 ? $"{(double)overallDelta / run.TotalEstimated:P0}" : "-";
         table.AddEmptyRow();
-        table.AddRow("[bold]Total[/]", done.TotalDeleted.ToString("N0"), done.TotalImported.ToString("N0"), done.TotalErrors.ToString("N0"), FormatDuration(run.Overall.Elapsed), overallRps, done.Cancelled ? "yes" : "no");
+        table.AddRow(
+            "[bold]Total[/]",
+            FormatEvents(run.TotalEstimated),
+            done.TotalImported.ToString("N0"),
+            overallDelta.ToString("+#,0;-#,0;0"),
+            overallDeltaPct,
+            done.TotalDeleted.ToString("N0"),
+            done.TotalErrors.ToString("N0"),
+            FormatDuration(run.Overall.Elapsed),
+            overallRps,
+            done.Cancelled ? "yes" : "no");
         AnsiConsole.Write(table);
     }
 
@@ -288,10 +327,6 @@ public class SpectreTaskProgressReporter : IPipelineReporter
     private static string FormatEvents(long value) => value > 0 ? value.ToString("N0") : "?";
     private static string FormatDuration(TimeSpan span)
     {
-        if (span.TotalDays >= 1) return span.TotalDays >= 2 ? $"{(int)span.TotalDays}d {span.Hours}h {span.Minutes}m" : "1d";
-        if (span.TotalHours >= 1) return span.TotalHours >= 2 ? $"{span.Hours}h {span.Minutes}m {span.Seconds}s" : "1h";
-        if (span.TotalMinutes >= 1) return span.TotalMinutes >= 2 ? $"{span.Minutes}m {span.Seconds}s" : "1m";
-        if (span.TotalSeconds >= 1) return span.TotalSeconds >= 2 ? $"{span.Seconds}s" : "1s";
-        return "<1s";
+        return span.ToString(@"hh\:mm\:ss");
     }
 }
